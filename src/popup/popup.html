@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LinkedIn Job Eval</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <header class="header">
+      <h1 class="title">Job Eval</h1>
+      <div class="header-actions">
+        <button type="button" class="tab-link" data-tab="settings">Settings</button>
+        <button type="button" class="tab-link" data-tab="resumes">Resumes</button>
+      </div>
+    </header>
+
+    <section id="panel-main" class="panel active">
+      <p class="hint resume-hint" id="resumeHint">Select resumes to include. If none selected, only your profile intent, skills/tech stack, and negative filters are sent.</p>
+      <div id="resumeCheckboxes" class="resume-checkboxes"></div>
+      <div class="eval-section">
+        <button type="button" id="evaluateBtn" class="btn btn-primary" disabled>Evaluate this job</button>
+        <p id="evalHint" class="hint">Open a LinkedIn job page, then click to evaluate.</p>
+      </div>
+      <div id="resultWrap" class="result-wrap hidden">
+        <div id="resultContent" class="result-content"></div>
+        <details id="resultRaw" class="result-raw hidden">
+          <summary>Raw response</summary>
+          <pre id="resultRawText"></pre>
+        </details>
+      </div>
+      <div id="loadingWrap" class="loading-wrap hidden">Evaluating…</div>
+      <div id="errorWrap" class="error-wrap hidden"><p id="errorText" class="error"></p></div>
+    </section>
+
+    <section id="panel-settings" class="panel">
+      <label class="label">Profile & role intent</label>
+      <textarea id="profileIntent" class="textarea" rows="4" placeholder="Who you are, what roles you target, preferred companies/locations…"></textarea>
+      <label class="label">Skills / tech stack</label>
+      <textarea id="skillsTechStack" class="textarea" rows="3" placeholder="e.g. React, Next.js, Node.js, TypeScript, Python"></textarea>
+      <label class="label">Negative filters (deal-breakers)</label>
+      <textarea id="negativeFilters" class="textarea" rows="3" placeholder="What you are NOT looking for (e.g. Java-only, on-site only, fluent Dutch)"></textarea>
+      <label class="label">Provider</label>
+      <select id="apiProvider" class="select">
+        <option value="ollama">Ollama (local)</option>
+        <option value="google">Google (Gemini)</option>
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <div id="apiKeyWrap" class="api-key-wrap hidden">
+        <label class="label">API key</label>
+        <input type="password" id="apiKey" class="input" placeholder="Your API key" autocomplete="off" />
+      </div>
+      <button type="button" id="saveSettings" class="btn btn-secondary">Save settings</button>
+      <button type="button" class="tab-link back" data-tab="main">Back</button>
+    </section>
+
+    <section id="panel-resumes" class="panel">
+      <p class="hint">Add up to 5 resumes (PDF or DOCX). Label each (e.g. Frontend, Full-stack).</p>
+      <div id="resumeList" class="resume-list"></div>
+      <div id="addResumeWrap" class="add-resume">
+        <input type="text" id="resumeLabel" class="input inline-label" placeholder="Label (e.g. Frontend)" maxlength="50" />
+        <input type="file" id="resumeFile" class="file-input" accept=".pdf,.docx" />
+        <button type="button" id="addResume" class="btn btn-secondary">Add resume</button>
+      </div>
+      <p id="resumeError" class="error hidden"></p>
+      <button type="button" class="tab-link back" data-tab="main">Back</button>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

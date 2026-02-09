@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Job Eval",
+  "version": "0.1.0",
+  "description": "Evaluate whether a LinkedIn job is worth applying to — conservative, explainable verdict.",
+  "permissions": ["activeTab", "storage", "scripting", "sidePanel"],
+  "host_permissions": ["*://www.linkedin.com/*", "http://localhost:11434/*","https://generativelanguage.googleapis.com/*"],
+  "action": {
+    "default_title": "Evaluate this job"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["pdf.worker.mjs"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.linkedin.com/jobs/view/*",
+        "*://www.linkedin.com/jobs/collections/*","*://www.linkedin.com/jobs/search/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}
