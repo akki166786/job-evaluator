@@ -11,8 +11,8 @@
     <header class="header">
       <h1 class="title">Job Eval</h1>
       <div class="header-actions">
-        <button type="button" class="tab-link" data-tab="settings">Settings</button>
-        <button type="button" class="tab-link" data-tab="resumes">Resumes</button>
+        <button type="button" class="tab-link" data-tab="settings" aria-label="Open settings">Settings</button>
+        <button type="button" class="tab-link" data-tab="resumes" aria-label="Manage resumes">Resumes</button>
       </div>
     </header>
 
@@ -20,14 +20,14 @@
       <p class="hint resume-hint" id="resumeHint">Select resumes to include. If none selected, only your profile intent, skills/tech stack, and negative filters are sent.</p>
       <div id="resumeCheckboxes" class="resume-checkboxes"></div>
       <div class="eval-section">
-        <button type="button" id="evaluateBtn" class="btn btn-primary" disabled>Evaluate this job</button>
+        <button type="button" id="evaluateBtn" class="btn btn-primary" disabled aria-label="Evaluate current LinkedIn job">Evaluate this job</button>
         <p id="evalHint" class="hint">Open a LinkedIn job page, then click to evaluate.</p>
       </div>
       <div id="cacheWrap" class="cache-wrap hidden">
         <p id="cacheText" class="hint"></p>
         <div class="cache-actions">
-          <button type="button" id="useCacheBtn" class="btn btn-secondary">Use cached score</button>
-          <button type="button" id="rerunBtn" class="btn btn-primary">Re-evaluate</button>
+          <button type="button" id="useCacheBtn" class="btn btn-secondary" aria-label="Use previously cached evaluation score">Use cached score</button>
+          <button type="button" id="rerunBtn" class="btn btn-primary" aria-label="Re-evaluate this job">Re-evaluate</button>
         </div>
       </div>
       <div id="resultWrap" class="result-wrap hidden">
@@ -62,11 +62,11 @@
         <input type="text" id="ollamaModel" class="input" placeholder="e.g. llama3.1:8b" />
       </div>
       <div id="apiKeyWrap" class="api-key-wrap hidden">
-        <label class="label">API key (selected provider)</label>
-        <input type="password" id="apiKey" class="input" placeholder="Your API key" autocomplete="off" />
+        <label class="label" id="apiKeyLabel">API key</label>
+        <input type="password" id="apiKey" class="input" placeholder="Your API key" autocomplete="off" aria-labelledby="apiKeyLabel" />
       </div>
-      <button type="button" id="saveSettings" class="btn btn-secondary">Save settings</button>
-      <button type="button" class="tab-link back" data-tab="main">Back</button>
+      <button type="button" id="saveSettings" class="btn btn-secondary" aria-label="Save settings">Save settings</button>
+      <button type="button" class="tab-link back" data-tab="main" aria-label="Back to main panel">Back</button>
     </section>
 
     <section id="panel-resumes" class="panel">
@@ -75,10 +75,10 @@
       <div id="addResumeWrap" class="add-resume">
         <input type="text" id="resumeLabel" class="input inline-label" placeholder="Label (e.g. Frontend)" maxlength="50" />
         <input type="file" id="resumeFile" class="file-input" accept=".pdf,.docx" />
-        <button type="button" id="addResume" class="btn btn-secondary">Add resume</button>
+        <button type="button" id="addResume" class="btn btn-secondary" aria-label="Add resume">Add resume</button>
       </div>
-      <p id="resumeError" class="error hidden"></p>
-      <button type="button" class="tab-link back" data-tab="main">Back</button>
+      <p id="resumeError" class="error hidden" role="alert"></p>
+      <button type="button" class="tab-link back" data-tab="main" aria-label="Back to main panel">Back</button>
     </section>
   </div>
   <script src="popup.js"></script>

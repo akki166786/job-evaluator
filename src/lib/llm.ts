@@ -192,7 +192,11 @@ function extractResultFromBrokenJson(text: string): EvaluationResultRaw | null {
   const bestResumeLabel = bestMatch ? (bestMatch[1] ?? null) : null;
   const hardMatch = text.match(/"hardRejectionReason"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|null)/);
   const hardRejectionReason = hardMatch ? (hardMatch[1] ?? null) : null;
-  const extraInfo = text ? { rawText: text } : null;
+  // Cap raw text for debugging; avoid bloating storage/UI with full LLM responses
+  const MAX_RAW_TEXT_LEN = 500;
+  const extraInfo = text
+    ? { rawText: text.length > MAX_RAW_TEXT_LEN ? text.slice(0, MAX_RAW_TEXT_LEN) + '…' : text }
+    : null;
   return {
     score,
     verdict,
@@ -314,7 +318,7 @@ export async function evaluateJob(
     return normalizeResult(raw);
   }
 
-  // OpenAI-compatible (Ollama, OpenAI, OpenRouter)
+  // OpenAI-compatible (Ollama, OpenAI, Groq, OpenRouter)
   const body = {
     model,
     max_tokens: 1024,
@@ -341,7 +345,9 @@ export async function evaluateJob(
     clearTimeout(timeout);
     if ((e as Error).name === 'AbortError') {
       throw new Error(
-        `Request timed out after ${timeoutMs / 1000}s. Ollama may be slow on CPU—try again or keep the popup open longer.`
+        provider === 'ollama'
+          ? `Request timed out after ${timeoutMs / 1000}s. Ollama may be slow on CPU—try again or keep the panel open longer.`
+          : `Request to ${provider} timed out after ${timeoutMs / 1000}s. The API may be overloaded—try again.`
       );
     }
     throw e;
@@ -349,14 +355,16 @@ export async function evaluateJob(
   clearTimeout(timeout);
   if (!res.ok) {
     const t = await res.text();
-    if (res.status === 0 || res.type === 'opaque') {
-      throw new Error('Could not reach Ollama. Is it running? (e.g. ollama serve or Docker.)');
-    }
-    if (res.status === 403) {
-      throw new Error(
-        'Ollama returned Forbidden (403). Start Ollama with OLLAMA_ORIGINS=* to allow this extension. ' +
-          'Docker: docker run -e OLLAMA_ORIGINS=* -p 11434:11434 ollama/ollama'
-      );
+    if (provider === 'ollama') {
+      if (res.status === 0 || res.type === 'opaque') {
+        throw new Error('Could not reach Ollama. Is it running? (e.g. ollama serve or Docker.)');
+      }
+      if (res.status === 403) {
+        throw new Error(
+          'Ollama returned Forbidden (403). Start Ollama with OLLAMA_ORIGINS=* to allow this extension. ' +
+            'Docker: docker run -e OLLAMA_ORIGINS=* -p 11434:11434 ollama/ollama'
+        );
+      }
     }
     throw new Error(res.status === 401 ? 'Invalid API key.' : res.status === 429 ? 'Rate limited.' : t || res.statusText);
   }
