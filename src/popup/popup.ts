@@ -29,24 +29,36 @@ const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
 const ollamaModelWrap = document.getElementById('ollamaModelWrap')!;
 const ollamaModelEl = document.getElementById('ollamaModel') as HTMLInputElement;
 const saveSettingsBtn = document.getElementById('saveSettings')!;
+let apiKeys: Partial<Record<ApiProvider, string>> = {};
 
 function showApiKeyField() {
-  const needKey = apiProviderEl.value !== 'ollama';
+  const provider = apiProviderEl.value as ApiProvider;
+  const needKey = provider !== 'ollama';
   apiKeyWrap.classList.toggle('hidden', !needKey);
-  ollamaModelWrap.classList.toggle('hidden', apiProviderEl.value !== 'ollama');
+  apiKeyEl.value = apiKeys[provider] ?? '';
+  ollamaModelWrap.classList.toggle('hidden', provider !== 'ollama');
 }
 
 apiProviderEl.addEventListener('change', showApiKeyField);
 
 saveSettingsBtn.addEventListener('click', async () => {
+  const provider = apiProviderEl.value as ApiProvider;
+  const trimmedKey = apiKeyEl.value.trim();
+  const nextApiKeys = { ...apiKeys };
+  if (trimmedKey) {
+    nextApiKeys[provider] = trimmedKey;
+  } else {
+    delete nextApiKeys[provider];
+  }
   await saveSettings({
     profileIntent: profileIntentEl.value.trim(),
     skillsTechStack: skillsTechStackEl.value.trim(),
     negativeFilters: negativeFiltersEl.value.trim(),
-    apiProvider: apiProviderEl.value as ApiProvider,
-    apiKey: apiKeyEl.value.trim(),
+    apiProvider: provider,
+    apiKeys: nextApiKeys,
     ollamaModel: ollamaModelEl.value.trim(),
   });
+  apiKeys = nextApiKeys;
   saveSettingsBtn.textContent = 'Saved';
   setTimeout(() => (saveSettingsBtn.textContent = 'Save settings'), 1500);
   const resumeHint = document.getElementById('resumeHint');
@@ -62,7 +74,7 @@ async function loadSettings() {
   skillsTechStackEl.value = s.skillsTechStack;
   negativeFiltersEl.value = s.negativeFilters;
   apiProviderEl.value = s.apiProvider;
-  apiKeyEl.value = s.apiKey;
+  apiKeys = s.apiKeys ?? {};
   ollamaModelEl.value = s.ollamaModel || 'llama3.1:8b';
   showApiKeyField();
   const resumeHint = document.getElementById('resumeHint');
@@ -230,7 +242,7 @@ async function updateEvaluateButtonState() {
   const onJobPage = isLinkedInJobPage(tab?.url);
   const settings = await getSettings();
   const needKey = settings.apiProvider !== 'ollama';
-  const hasKey = !!settings.apiKey?.trim();
+  const hasKey = !!settings.apiKeys?.[settings.apiProvider]?.trim();
   evaluateBtn.disabled = !onJobPage || (needKey && !hasKey);
   evalHint.textContent = !onJobPage
     ? 'Open a LinkedIn job page, then click to evaluate.'

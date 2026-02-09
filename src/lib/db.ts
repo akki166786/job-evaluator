@@ -13,8 +13,8 @@ const SETTINGS_KEYS = [
   'profileIntent',
   'skillsTechStack',
   'negativeFilters',
-  'apiKey',
   'apiProvider',
+  'apiKeys',
   'ollamaModel',
 ] as const;
 
@@ -114,6 +114,23 @@ async function getSetting<K extends (typeof SETTINGS_KEYS)[number]>(
   });
 }
 
+async function getLegacyApiKey(): Promise<string | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(SETTINGS_STORE, 'readonly');
+    const req = t.objectStore(SETTINGS_STORE).get('apiKey');
+    req.onsuccess = () => {
+      db.close();
+      const row = req.result as { key: string; value: string } | undefined;
+      resolve(row?.value);
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
 async function setSetting<K extends (typeof SETTINGS_KEYS)[number]>(
   key: K,
   value: SettingsRecord[K]
@@ -135,15 +152,22 @@ async function setSetting<K extends (typeof SETTINGS_KEYS)[number]>(
 
 /** Settings store uses key-value; we use a single object in API for convenience. */
 export async function getSettings(): Promise<SettingsRecord> {
-  const [profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider, ollamaModel] = await Promise.all([
+  const [profileIntent, skillsTechStack, negativeFilters, apiProvider, apiKeys, ollamaModel, legacyApiKey] =
+    await Promise.all([
     getSetting('profileIntent'),
     getSetting('skillsTechStack'),
     getSetting('negativeFilters'),
-    getSetting('apiKey'),
     getSetting('apiProvider'),
+    getSetting('apiKeys'),
     getSetting('ollamaModel'),
+    getLegacyApiKey(),
   ]);
-  return { profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider, ollamaModel };
+  const normalizedApiKeys = apiKeys && Object.keys(apiKeys).length > 0 ? apiKeys : {};
+  if (legacyApiKey && !normalizedApiKeys[apiProvider]) {
+    normalizedApiKeys[apiProvider] = legacyApiKey;
+    await saveSettings({ apiKeys: normalizedApiKeys });
+  }
+  return { profileIntent, skillsTechStack, negativeFilters, apiProvider, apiKeys: normalizedApiKeys, ollamaModel };
 }
 
 export async function saveSettings(settings: Partial<SettingsRecord>): Promise<void> {

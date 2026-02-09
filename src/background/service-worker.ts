@@ -39,7 +39,7 @@ chrome.runtime.onMessage.addListener(
           settings.skillsTechStack,
           settings.negativeFilters,
           settings.apiProvider,
-          settings.apiKey,
+          settings.apiKeys?.[settings.apiProvider] ?? '',
           settings.ollamaModel
         );
         sendResponse(result);
