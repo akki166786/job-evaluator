@@ -96,7 +96,7 @@ function parseJsonFromResponse(text: string): EvaluationResultRaw {
     try {
       const parsed = JSON.parse(repair(cleaned)) as EvaluationResultRaw;
       if (parsed != null && typeof parsed === 'object' && 'verdict' in parsed) {
-        const extraInfo = collectExtraInfo(parsed as Record<string, unknown>);
+        const extraInfo = collectExtraInfo(parsed as unknown as Record<string, unknown>);
         if (extraInfo) parsed.extraInfo = extraInfo;
         return parsed;
       }
