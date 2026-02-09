@@ -23,6 +23,13 @@
         <button type="button" id="evaluateBtn" class="btn btn-primary" disabled>Evaluate this job</button>
         <p id="evalHint" class="hint">Open a LinkedIn job page, then click to evaluate.</p>
       </div>
+      <div id="cacheWrap" class="cache-wrap hidden">
+        <p id="cacheText" class="hint"></p>
+        <div class="cache-actions">
+          <button type="button" id="useCacheBtn" class="btn btn-secondary">Use cached score</button>
+          <button type="button" id="rerunBtn" class="btn btn-primary">Re-evaluate</button>
+        </div>
+      </div>
       <div id="resultWrap" class="result-wrap hidden">
         <div id="resultContent" class="result-content"></div>
         <details id="resultRaw" class="result-raw hidden">
@@ -49,6 +56,10 @@
         <option value="anthropic">Anthropic</option>
         <option value="openrouter">OpenRouter</option>
       </select>
+      <div id="ollamaModelWrap" class="api-key-wrap">
+        <label class="label">Ollama model</label>
+        <input type="text" id="ollamaModel" class="input" placeholder="e.g. llama3.1:8b" />
+      </div>
       <div id="apiKeyWrap" class="api-key-wrap hidden">
         <label class="label">API key</label>
         <input type="password" id="apiKey" class="input" placeholder="Your API key" autocomplete="off" />

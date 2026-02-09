@@ -26,7 +26,66 @@ function getDescriptionText(container: Element | null): string {
   return getText(container);
 }
 
+function getJobIdFromUrl(): string | null {
+  const match = window.location.href.match(/\/jobs\/view\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+function getJobIdFromDom(): string | null {
+  const el = document.querySelector('[data-job-id], [data-entity-urn]');
+  const jobId = el?.getAttribute('data-job-id');
+  if (jobId) return jobId;
+  const urn = el?.getAttribute('data-entity-urn');
+  if (!urn) return null;
+  const urnMatch = urn.match(/:jobPosting:(\d+)/);
+  return urnMatch ? urnMatch[1] : null;
+}
+
+function getMetaContent(name: string): string {
+  const el = document.querySelector(`meta[name="${name}"]`) ?? document.querySelector(`meta[property="${name}"]`);
+  return el?.getAttribute('content')?.trim() ?? '';
+}
+
+function parseJsonLdJob(): Partial<JobData> | null {
+  const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+  for (const script of scripts) {
+    try {
+      const json = JSON.parse(script.textContent ?? '');
+      const nodes = Array.isArray(json) ? json : [json];
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const type = (node as { ['@type']?: string })['@type'];
+        if (type === 'JobPosting' || (Array.isArray(type) && type.includes('JobPosting'))) {
+          const posting = node as {
+            title?: string;
+            description?: string;
+            jobLocation?: { address?: { addressLocality?: string; addressRegion?: string; addressCountry?: string } };
+            datePosted?: string;
+            identifier?: { value?: string };
+          };
+          const locationParts = [
+            posting.jobLocation?.address?.addressLocality,
+            posting.jobLocation?.address?.addressRegion,
+            posting.jobLocation?.address?.addressCountry,
+          ].filter(Boolean);
+          return {
+            title: posting.title?.trim() ?? '',
+            description: posting.description?.replace(/\s+/g, ' ').trim() ?? '',
+            location: locationParts.join(', '),
+            id: posting.identifier?.value ?? '',
+          };
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export function extractJobData(): JobData | null {
+  const jsonLd = parseJsonLdJob();
+  const jobId = getJobIdFromDom() ?? getJobIdFromUrl() ?? jsonLd?.id ?? '';
   // Title: common patterns on job view page
   const titleSelectors = [
     '.job-details-jobs-unified-top-card__job-title',
@@ -36,7 +95,7 @@ export function extractJobData(): JobData | null {
     'h1',
   ];
   const titleEl = queryOne(titleSelectors);
-  const title = getText(titleEl ?? document.querySelector('h1'));
+  const title = getText(titleEl ?? document.querySelector('h1')) || jsonLd?.title || getMetaContent('og:title');
 
   // Description: main job description body
   const descSelectors = [
@@ -47,7 +106,10 @@ export function extractJobData(): JobData | null {
     '.jobs-box .jobs-box__html-content',
   ];
   const descEl = queryOne(descSelectors) ?? document.querySelector('.jobs-description__content');
-  const description = getDescriptionText(descEl);
+  const description =
+    getDescriptionText(descEl) ||
+    jsonLd?.description ||
+    getMetaContent('description');
 
   // Location: often in top card or sidebar
   const locationSelectors = [
@@ -57,7 +119,7 @@ export function extractJobData(): JobData | null {
     '[data-job-id] span[class*="primary-description"]',
   ];
   const locationEl = queryOne(locationSelectors);
-  let location = getText(locationEl);
+  let location = getText(locationEl) || jsonLd?.location || getMetaContent('og:location');
   if (!location) {
     const locSpan = document.querySelector('.jobs-unified-top-card__bullet');
     if (locSpan) location = getText(locSpan.parentElement);
@@ -65,6 +127,7 @@ export function extractJobData(): JobData | null {
 
   if (!title && !description) return null;
   return {
+    id: jobId || `${title}-${location}`.trim() || 'unknown',
     title: title || 'Unknown title',
     description: description || '',
     location: location || '',

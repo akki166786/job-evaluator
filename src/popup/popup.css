@@ -126,7 +126,8 @@ body {
 .result-wrap.hidden,
 .loading-wrap.hidden,
 .error-wrap.hidden,
-.result-raw.hidden {
+.result-raw.hidden,
+.cache-wrap.hidden {
   display: none !important;
 }
 
@@ -228,6 +229,23 @@ body {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid #ddd;
+}
+
+#cacheWrap {
+  margin-top: 8px;
+  padding: 10px;
+  background: #fff8e1;
+  border: 1px solid #ffe0b2;
+  border-radius: 8px;
+}
+
+.cache-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.cache-actions .btn {
+  flex: 1;
 }
 
 #evalHint {
