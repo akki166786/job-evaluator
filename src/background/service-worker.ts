@@ -39,7 +39,8 @@ chrome.runtime.onMessage.addListener(
           settings.skillsTechStack,
           settings.negativeFilters,
           settings.apiProvider,
-          settings.apiKey
+          settings.apiKey,
+          settings.ollamaModel
         );
         sendResponse(result);
       } catch (e) {

@@ -1,5 +1,6 @@
 /** Job data read from the current LinkedIn job page (visible DOM only). */
 export interface JobData {
+  id: string;
   title: string;
   description: string;
   location: string;
@@ -20,6 +21,7 @@ export interface SettingsRecord {
   negativeFilters: string;
   apiKey: string;
   apiProvider: ApiProvider;
+  ollamaModel: string;
 }
 
 export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google';
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Omit<SettingsRecord, 'apiKey'> & { apiKey?: strin
   negativeFilters: '',
   apiKey: '',
   apiProvider: 'ollama',
+  ollamaModel: 'llama3.1:8b',
 };
 
 /** Result of the evaluation (from LLM, parsed JSON). */
@@ -42,6 +45,7 @@ export interface EvaluationResult {
   riskBullets: string[];
   bestResumeLabel: string | null;
   explanation: string;
+  extraInfo?: Record<string, unknown> | null;
 }
 
 /** Raw LLM response shape (before mapping to EvaluationResult). */
@@ -53,4 +57,5 @@ export interface EvaluationResultRaw {
   riskBullets?: string[];
   bestResumeLabel?: string | null;
   explanation?: string;
+  extraInfo?: Record<string, unknown> | null;
 }

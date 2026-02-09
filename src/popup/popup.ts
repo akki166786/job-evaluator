@@ -5,8 +5,10 @@ import {
   addResume,
   deleteResume,
   generateResumeId,
+  getJobEvaluation,
+  saveJobEvaluation,
 } from '../lib/db';
-import type { ResumeRecord, EvaluationResult, ApiProvider } from '../lib/types';
+import type { ResumeRecord, EvaluationResult, ApiProvider, JobData } from '../lib/types';
 
 // --- Tab switching (main = resume checkboxes + evaluate; settings / resumes = panels) ---
 document.querySelectorAll('.tab-link').forEach((el) => {
@@ -24,11 +26,14 @@ const negativeFiltersEl = document.getElementById('negativeFilters') as HTMLText
 const apiProviderEl = document.getElementById('apiProvider') as HTMLSelectElement;
 const apiKeyWrap = document.getElementById('apiKeyWrap')!;
 const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
+const ollamaModelWrap = document.getElementById('ollamaModelWrap')!;
+const ollamaModelEl = document.getElementById('ollamaModel') as HTMLInputElement;
 const saveSettingsBtn = document.getElementById('saveSettings')!;
 
 function showApiKeyField() {
   const needKey = apiProviderEl.value !== 'ollama';
   apiKeyWrap.classList.toggle('hidden', !needKey);
+  ollamaModelWrap.classList.toggle('hidden', apiProviderEl.value !== 'ollama');
 }
 
 apiProviderEl.addEventListener('change', showApiKeyField);
@@ -40,6 +45,7 @@ saveSettingsBtn.addEventListener('click', async () => {
     negativeFilters: negativeFiltersEl.value.trim(),
     apiProvider: apiProviderEl.value as ApiProvider,
     apiKey: apiKeyEl.value.trim(),
+    ollamaModel: ollamaModelEl.value.trim(),
   });
   saveSettingsBtn.textContent = 'Saved';
   setTimeout(() => (saveSettingsBtn.textContent = 'Save settings'), 1500);
@@ -57,6 +63,7 @@ async function loadSettings() {
   negativeFiltersEl.value = s.negativeFilters;
   apiProviderEl.value = s.apiProvider;
   apiKeyEl.value = s.apiKey;
+  ollamaModelEl.value = s.ollamaModel || 'llama3.1:8b';
   showApiKeyField();
   const resumeHint = document.getElementById('resumeHint');
   if (resumeHint) {
@@ -199,6 +206,17 @@ const resultRawText = document.getElementById('resultRawText')!;
 const loadingWrap = document.getElementById('loadingWrap')!;
 const errorWrap = document.getElementById('errorWrap')!;
 const errorText = document.getElementById('errorText')!;
+const cacheWrap = document.getElementById('cacheWrap')!;
+const cacheText = document.getElementById('cacheText')!;
+const useCacheBtn = document.getElementById('useCacheBtn')!;
+const rerunBtn = document.getElementById('rerunBtn')!;
+
+let pendingJobForRerun: {
+  jobId: string;
+  job: JobData;
+  resumeIds: string[] | undefined;
+  cachedScore: number;
+} | null = null;
 
 const LINKEDIN_JOB_VIEW = /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+/;
 const LINKEDIN_JOB_COLLECTIONS = /^https:\/\/www\.linkedin\.com\/jobs\/collections\/[^?]*\?.*currentJobId=/;
@@ -225,6 +243,7 @@ evaluateBtn.addEventListener('click', async () => {
   resultWrap.classList.add('hidden');
   errorWrap.classList.add('hidden');
   loadingWrap.classList.remove('hidden');
+  cacheWrap.classList.add('hidden');
   errorText.textContent = '';
   evaluateBtn.disabled = true;
   evalHint.classList.add('hidden');
@@ -259,6 +278,22 @@ evaluateBtn.addEventListener('click', async () => {
     }
     const job = response.job;
     const selectedIds = getSelectedResumeIds();
+    const cached = await getJobEvaluation(job.id);
+    if (cached) {
+      loadingWrap.classList.add('hidden');
+      evaluateBtn.disabled = false;
+      await updateEvaluateButtonState();
+      evalHint.classList.remove('hidden');
+      cacheText.textContent = `Already evaluated. Cached match score: ${cached.score}/100.`;
+      cacheWrap.classList.remove('hidden');
+      pendingJobForRerun = {
+        jobId: job.id,
+        job,
+        resumeIds: selectedIds.length > 0 ? selectedIds : undefined,
+        cachedScore: cached.score,
+      };
+      return;
+    }
     const result = await chrome.runtime.sendMessage({
       type: 'EVALUATE_JOB',
       job,
@@ -278,6 +313,7 @@ evaluateBtn.addEventListener('click', async () => {
       return;
     }
     showResult(result as EvaluationResult);
+    await saveJobEvaluation(job.id, (result as EvaluationResult).score);
     resultWrap.classList.remove('hidden');
   } catch (e) {
     loadingWrap.classList.add('hidden');
@@ -286,6 +322,53 @@ evaluateBtn.addEventListener('click', async () => {
     evalHint.classList.remove('hidden');
     errorText.textContent = (e as Error).message;
     errorWrap.classList.remove('hidden');
+  }
+});
+
+useCacheBtn.addEventListener('click', () => {
+  if (!pendingJobForRerun) return;
+  const { jobId, cachedScore } = pendingJobForRerun;
+  resultContent.innerHTML = `
+    <div class="result-verdict maybe">ℹ️ Already evaluated</div>
+    <div class="result-score">Score: ${cachedScore}/100</div>
+    <div class="result-explanation">Cached result for job ID: ${escapeHtml(jobId)}</div>
+  `;
+  resultWrap.classList.remove('hidden');
+  cacheWrap.classList.add('hidden');
+  pendingJobForRerun = null;
+});
+
+rerunBtn.addEventListener('click', async () => {
+  if (!pendingJobForRerun) return;
+  cacheWrap.classList.add('hidden');
+  loadingWrap.classList.remove('hidden');
+  resultWrap.classList.add('hidden');
+  errorWrap.classList.add('hidden');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'EVALUATE_JOB',
+      job: pendingJobForRerun.job,
+      resumeIds: pendingJobForRerun.resumeIds,
+    });
+    loadingWrap.classList.add('hidden');
+    if (result?.error) {
+      errorText.textContent = result.error;
+      errorWrap.classList.remove('hidden');
+      if (result.raw) {
+        resultRaw.classList.remove('hidden');
+        resultRawText.textContent = result.raw;
+      }
+      return;
+    }
+    showResult(result as EvaluationResult);
+    await saveJobEvaluation(pendingJobForRerun.jobId, (result as EvaluationResult).score);
+    resultWrap.classList.remove('hidden');
+  } catch (e) {
+    loadingWrap.classList.add('hidden');
+    errorText.textContent = (e as Error).message;
+    errorWrap.classList.remove('hidden');
+  } finally {
+    pendingJobForRerun = null;
   }
 });
 
@@ -307,6 +390,9 @@ function showResult(r: EvaluationResult) {
   }
   if (r.bestResumeLabel) {
     html += `<div class="result-best-resume">Best resume: ${escapeHtml(r.bestResumeLabel)}</div>`;
+  }
+  if (r.extraInfo && Object.keys(r.extraInfo).length > 0) {
+    html += `<details class="result-raw"><summary>Extra info</summary><pre>${escapeHtml(JSON.stringify(r.extraInfo, null, 2))}</pre></details>`;
   }
   resultContent.innerHTML = html;
   resultRaw.classList.add('hidden');

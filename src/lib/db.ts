@@ -2,10 +2,12 @@ import type { ResumeRecord, SettingsRecord, ApiProvider } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 const DB_NAME = 'linkedin-job-eval-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const RESUMES_STORE = 'resumes';
 const SETTINGS_STORE = 'settings';
+const JOB_EVALS_STORE = 'job_evaluations';
 const MAX_RESUMES = 5;
+const MAX_JOB_EVALS = 1000;
 
 const SETTINGS_KEYS = [
   'profileIntent',
@@ -13,6 +15,7 @@ const SETTINGS_KEYS = [
   'negativeFilters',
   'apiKey',
   'apiProvider',
+  'ollamaModel',
 ] as const;
 
 function openDB(): Promise<IDBDatabase> {
@@ -28,6 +31,10 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
         db.createObjectStore(SETTINGS_STORE, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(JOB_EVALS_STORE)) {
+        const evals = db.createObjectStore(JOB_EVALS_STORE, { keyPath: 'jobId' });
+        evals.createIndex('evaluatedAt', 'evaluatedAt', { unique: false });
       }
     };
   });
@@ -128,14 +135,15 @@ async function setSetting<K extends (typeof SETTINGS_KEYS)[number]>(
 
 /** Settings store uses key-value; we use a single object in API for convenience. */
 export async function getSettings(): Promise<SettingsRecord> {
-  const [profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider] = await Promise.all([
+  const [profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider, ollamaModel] = await Promise.all([
     getSetting('profileIntent'),
     getSetting('skillsTechStack'),
     getSetting('negativeFilters'),
     getSetting('apiKey'),
     getSetting('apiProvider'),
+    getSetting('ollamaModel'),
   ]);
-  return { profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider };
+  return { profileIntent, skillsTechStack, negativeFilters, apiKey, apiProvider, ollamaModel };
 }
 
 export async function saveSettings(settings: Partial<SettingsRecord>): Promise<void> {
@@ -145,4 +153,81 @@ export async function saveSettings(settings: Partial<SettingsRecord>): Promise<v
 
 export function generateResumeId(): string {
   return `resume_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export interface JobEvaluationRecord {
+  jobId: string;
+  score: number;
+  evaluatedAt: number;
+}
+
+export async function getJobEvaluation(jobId: string): Promise<JobEvaluationRecord | null> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(JOB_EVALS_STORE, 'readonly');
+    const req = t.objectStore(JOB_EVALS_STORE).get(jobId);
+    req.onsuccess = () => {
+      db.close();
+      resolve((req.result as JobEvaluationRecord) ?? null);
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
+async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(JOB_EVALS_STORE, 'readwrite');
+    const store = t.objectStore(JOB_EVALS_STORE);
+    const index = store.index('evaluatedAt');
+    const countReq = store.count();
+    countReq.onsuccess = () => {
+      const count = countReq.result;
+      if (count <= MAX_JOB_EVALS) {
+        resolve();
+        return;
+      }
+      const toDelete = count - MAX_JOB_EVALS;
+      let deleted = 0;
+      index.openCursor().onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        store.delete(cursor.primaryKey);
+        deleted++;
+        if (deleted >= toDelete) {
+          resolve();
+          return;
+        }
+        cursor.continue();
+      };
+    };
+    countReq.onerror = () => reject(countReq.error);
+  });
+}
+
+export async function saveJobEvaluation(jobId: string, score: number): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(JOB_EVALS_STORE, 'readwrite');
+    const req = t.objectStore(JOB_EVALS_STORE).put({ jobId, score, evaluatedAt: Date.now() });
+    req.onsuccess = async () => {
+      try {
+        await trimJobEvaluations(db);
+      } catch {
+        // ignore cleanup errors
+      } finally {
+        db.close();
+        resolve();
+      }
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
 }

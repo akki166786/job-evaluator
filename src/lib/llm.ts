@@ -39,6 +39,31 @@ function getAuthHeader(provider: ApiProvider, apiKey: string): Record<string, st
 /**
  * Parse LLM JSON output; tolerate trailing commas, newlines in strings, and surrounding text.
  */
+const KNOWN_RESULT_KEYS = new Set([
+  'score',
+  'verdict',
+  'hardRejectionReason',
+  'matchBullets',
+  'riskBullets',
+  'bestResumeLabel',
+  'explanation',
+  'extraInfo',
+]);
+
+function collectExtraInfo(raw: Record<string, unknown>): Record<string, unknown> | null {
+  const extra: Record<string, unknown> = {};
+  const existing = raw.extraInfo;
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    Object.assign(extra, existing as Record<string, unknown>);
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    if (!KNOWN_RESULT_KEYS.has(key)) {
+      extra[key] = value;
+    }
+  }
+  return Object.keys(extra).length > 0 ? extra : null;
+}
+
 function parseJsonFromResponse(text: string): EvaluationResultRaw {
   let cleaned = text.trim();
   // Strip markdown code fences
@@ -64,11 +89,15 @@ function parseJsonFromResponse(text: string): EvaluationResultRaw {
   }
   // Remove trailing commas before } or ] (invalid in JSON, common in LLM output)
   cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
-  const repairOrder = [(s: string) => s, fixNewlinesInsideJsonStrings];
+  const repairOrder = [(s: string) => s, fixNewlinesInsideJsonStrings, coerceSmartQuotes, coerceSingleQuotes];
   for (const repair of repairOrder) {
     try {
       const parsed = JSON.parse(repair(cleaned)) as EvaluationResultRaw;
-      if (parsed != null && typeof parsed === 'object' && 'verdict' in parsed) return parsed;
+      if (parsed != null && typeof parsed === 'object' && 'verdict' in parsed) {
+        const extraInfo = collectExtraInfo(parsed as Record<string, unknown>);
+        if (extraInfo) parsed.extraInfo = extraInfo;
+        return parsed;
+      }
     } catch {
       continue;
     }
@@ -125,6 +154,14 @@ function fixNewlinesInsideJsonStrings(json: string): string {
   return out;
 }
 
+function coerceSmartQuotes(json: string): string {
+  return json.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+}
+
+function coerceSingleQuotes(json: string): string {
+  return json.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => `"${inner.replace(/"/g, '\\"')}"`);
+}
+
 /** Try to extract score, verdict, explanation from broken JSON for a minimal result. */
 function extractResultFromBrokenJson(text: string): EvaluationResultRaw | null {
   const scoreMatch = text.match(/"score"\s*:\s*(\d+)/);
@@ -153,6 +190,7 @@ function extractResultFromBrokenJson(text: string): EvaluationResultRaw | null {
   const bestResumeLabel = bestMatch ? (bestMatch[1] ?? null) : null;
   const hardMatch = text.match(/"hardRejectionReason"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|null)/);
   const hardRejectionReason = hardMatch ? (hardMatch[1] ?? null) : null;
+  const extraInfo = text ? { rawText: text } : null;
   return {
     score,
     verdict,
@@ -161,6 +199,7 @@ function extractResultFromBrokenJson(text: string): EvaluationResultRaw | null {
     riskBullets,
     bestResumeLabel,
     explanation,
+    extraInfo,
   };
 }
 
@@ -176,6 +215,7 @@ function normalizeResult(raw: EvaluationResultRaw): EvaluationResult {
     riskBullets: Array.isArray(raw.riskBullets) ? raw.riskBullets : [],
     bestResumeLabel: raw.bestResumeLabel ?? null,
     explanation: typeof raw.explanation === 'string' ? raw.explanation : '',
+    extraInfo: raw.extraInfo ?? null,
   };
 }
 
@@ -187,13 +227,14 @@ export async function evaluateJob(
   skillsTechStack: string,
   negativeFilters: string,
   provider: ApiProvider,
-  apiKey: string
+  apiKey: string,
+  ollamaModel: string
 ): Promise<EvaluationResult> {
   if (provider !== 'ollama' && !apiKey) {
     throw new Error('API key required for this provider.');
   }
 
-  const model = PROVIDER_MODELS[provider];
+  const model = provider === 'ollama' && ollamaModel ? ollamaModel : PROVIDER_MODELS[provider];
   const endpoint = PROVIDER_ENDPOINTS[provider];
   const userPrompt = buildUserPrompt(job, profileIntent, skillsTechStack, negativeFilters, resumes);
 
