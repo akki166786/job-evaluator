@@ -13,7 +13,7 @@ body {
 .popup {
   width: 380px;
   min-height: 320px;
-  max-height: 560px;
+  max-height: 100vh;
   display: flex;
   flex-direction: column;
   padding: 12px;
@@ -86,6 +86,10 @@ body {
   font-weight: 500;
   cursor: pointer;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel {
@@ -173,6 +177,8 @@ body {
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .resume-item {
@@ -188,6 +194,11 @@ body {
 .resume-item .label {
   margin: 0;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .resume-item .btn-delete {
@@ -268,6 +279,25 @@ body {
 .loading-wrap {
   background: #e3f2fd;
   color: #0a66c2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.loading-wrap::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border: 2px solid #0a66c2;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .error-wrap {

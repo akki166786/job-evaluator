@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { copyFileSync, mkdirSync, existsSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -8,8 +8,23 @@ const outDir = join(__dirname, 'dist');
 
 const watch = process.argv.includes('--watch');
 
+/** Sync version from package.json into manifest.json before copying to dist. */
+function syncVersion() {
+  const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
+  const manifestPath = join(__dirname, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  if (manifest.version !== pkg.version) {
+    manifest.version = pkg.version;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    console.log(`Synced manifest version → ${pkg.version}`);
+  }
+}
+
 async function build() {
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+
+  // Sync version before build
+  syncVersion();
 
   await esbuild.build({
     entryPoints: [
@@ -32,6 +47,16 @@ async function build() {
   copyFileSync(join(__dirname, 'manifest.json'), join(outDir, 'manifest.json'));
   copyFileSync(join(__dirname, 'src/popup/popup.html'), join(outDir, 'popup.html'));
   copyFileSync(join(__dirname, 'src/popup/popup.css'), join(outDir, 'popup.css'));
+
+  // Copy extension icons
+  const iconsOutDir = join(outDir, 'icons');
+  if (!existsSync(iconsOutDir)) mkdirSync(iconsOutDir, { recursive: true });
+  for (const size of [16, 32, 48, 128]) {
+    const src = join(__dirname, 'icons', `icon${size}.png`);
+    if (existsSync(src)) {
+      copyFileSync(src, join(iconsOutDir, `icon${size}.png`));
+    }
+  }
 
   // PDF.js worker (required for PDF resume parsing)
   const pdfWorkerSrc = join(__dirname, 'node_modules/pdfjs-dist/build/pdf.worker.mjs');
