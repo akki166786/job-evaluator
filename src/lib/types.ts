@@ -19,20 +19,20 @@ export interface SettingsRecord {
   profileIntent: string;
   skillsTechStack: string;
   negativeFilters: string;
-  apiKey: string;
   apiProvider: ApiProvider;
+  apiKeys: Partial<Record<ApiProvider, string>>;
   ollamaModel: string;
 }
 
-export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google';
+export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'groq';
 
 /** Default settings keys and values. */
-export const DEFAULT_SETTINGS: Omit<SettingsRecord, 'apiKey'> & { apiKey?: string } = {
+export const DEFAULT_SETTINGS: SettingsRecord = {
   profileIntent: '',
   skillsTechStack: '',
   negativeFilters: '',
-  apiKey: '',
   apiProvider: 'ollama',
+  apiKeys: {},
   ollamaModel: 'llama3.1:8b',
 };
 

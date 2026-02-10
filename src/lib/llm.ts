@@ -11,6 +11,7 @@ const PROVIDER_MODELS: Record<ApiProvider, string> = {
   anthropic: 'claude-3-haiku-20240307',
   openrouter: 'openai/gpt-4o-mini',
   google: 'gemini-3-flash-preview',
+  groq: 'llama-3.1-8b-instant',
 };
 
 const PROVIDER_ENDPOINTS: Record<ApiProvider, string> = {
@@ -19,6 +20,7 @@ const PROVIDER_ENDPOINTS: Record<ApiProvider, string> = {
   anthropic: 'https://api.anthropic.com/v1/messages',
   openrouter: 'https://openrouter.ai/api/v1/chat/completions',
   google: 'https://generativelanguage.googleapis.com/v1beta/models',
+  groq: 'https://api.groq.com/openai/v1/chat/completions',
 };
 
 function getAuthHeader(provider: ApiProvider, apiKey: string): Record<string, string> {

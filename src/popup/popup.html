@@ -51,6 +51,7 @@
       <label class="label">Provider</label>
       <select id="apiProvider" class="select">
         <option value="ollama">Ollama (local)</option>
+        <option value="groq">Groq</option>
         <option value="google">Google (Gemini)</option>
         <option value="openai">OpenAI</option>
         <option value="anthropic">Anthropic</option>
@@ -61,7 +62,7 @@
         <input type="text" id="ollamaModel" class="input" placeholder="e.g. llama3.1:8b" />
       </div>
       <div id="apiKeyWrap" class="api-key-wrap hidden">
-        <label class="label">API key</label>
+        <label class="label">API key (selected provider)</label>
         <input type="password" id="apiKey" class="input" placeholder="Your API key" autocomplete="off" />
       </div>
       <button type="button" id="saveSettings" class="btn btn-secondary">Save settings</button>

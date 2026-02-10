@@ -1,7 +1,7 @@
 {
   "name": "linkedin-job-eval",
-  "version": "0.1.0",
-  "description": "AI-assisted LinkedIn job evaluation (MVP) — is this job worth applying?",
+  "version": "1.0.0",
+  "description": "AI-assisted LinkedIn job evaluation — is this job worth applying?",
   "private": true,
   "scripts": {
     "build": "node build.mjs",

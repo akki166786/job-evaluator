@@ -1,7 +1,7 @@
 # LinkedIn Job Eval
 
-Chrome extension (MVP) that answers: **“Is this job worth my time to apply?”**  
-Uses a local LLM (Ollama) for conservative, explainable verdicts. No auto-apply, no scraping—you stay in control.
+Chrome extension that answers: **“Is this job worth my time to apply?”**  
+Supports local (Ollama) and cloud providers (OpenAI, Anthropic, OpenRouter, Google Gemini, Groq) for conservative, explainable verdicts. No auto-apply, no scraping—you stay in control.
 
 ---
 
@@ -90,7 +90,8 @@ The UI opens in the **side panel** (not a popup): click the extension icon to op
      - **Profile & role intent**: who you are, what roles you want (e.g. “Senior frontend, remote Netherlands”).
      - **Skills / tech stack**: your skills and tech (e.g. “React, Next.js, Node.js, TypeScript”).
      - **Negative filters**: deal-breakers (e.g. “No Java-only, no on-site-only, no fluent Dutch/German”).
-     - **Provider**: leave as **Ollama (local)** (no API key). With Ollama, only intent and skills are used; resumes are not sent.
+     - **Provider**: choose Ollama (local) or a cloud provider.
+     - **API key**: stored per provider in extension settings.
    - Click **Save settings**.
    - **Resumes**: add 1–5 resumes (PDF or DOCX) with labels for use with **cloud** providers (OpenAI, etc.). For Ollama they are ignored.
 
@@ -131,3 +132,20 @@ If the button is disabled, you’re not on a LinkedIn job view page or (for clou
 - **Chrome Extension** (Manifest v3), TypeScript, IndexedDB (resumes + settings), no backend.
 - **Ollama** at `http://localhost:11434` (OpenAI-compatible API); default model: **llama3.1:8b**. For Ollama, only profile intent and skills/tech stack are sent (no resumes).
 - All data stays on your machine when using Ollama.
+
+---
+
+## Chrome Web Store release notes (v1.0)
+
+- Manifest and package version are now `1.0.0`.
+- App/action/store icons are included under `assets/icons` and wired in `manifest.json`.
+- Required host permissions for all supported providers are declared in `manifest.json`.
+
+Before publishing, prepare:
+- store screenshots (small + large), promotional tile assets,
+- privacy policy URL,
+- support contact,
+- short and detailed listing description,
+- zip the `dist/` output after `npm run build`.
+
+- Icon PNG files are generated during build into `dist/assets/icons` to keep pull requests text-only.
