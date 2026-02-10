@@ -24,11 +24,11 @@ The extension reads the job title, description, and location from the page, comb
 | Provider | Default model | Cost | Get an API key |
 |---|---|---|---|
 | **Ollama (local)** | `llama3.1:8b` (configurable) | Free -- runs on your machine | Not needed |
-| **Groq** | `llama-3.1-8b-instant` | Free tier available | [console.groq.com](https://console.groq.com) |
+| **Groq** | `openai/gpt-oss-120b` | Free tier available | [console.groq.com](https://console.groq.com) |
 | **OpenAI** | `gpt-4o-mini` | ~$0.15 / 1M input tokens | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | **Anthropic** | `claude-haiku-4-5` | ~$1.00 / 1M input tokens | [console.anthropic.com](https://console.anthropic.com) |
 | **Google Gemini** | `gemini-3-flash-preview` | Free tier available | [aistudio.google.dev/apikey](https://aistudio.google.dev/apikey) |
-| **OpenRouter** | `openai/gpt-4o-mini` | Varies by model | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **OpenRouter** | `tngtech/deepseek-r1t2-chimera:free` | Free | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
 Each provider stores its own API key separately. Switching providers in Settings loads the matching key automatically.
 

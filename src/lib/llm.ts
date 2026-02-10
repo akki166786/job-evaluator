@@ -9,9 +9,9 @@ const PROVIDER_MODELS: Record<ApiProvider, string> = {
   ollama: 'llama3.1:8b',
   openai: 'gpt-4o-mini',
   anthropic: 'claude-haiku-4-5',
-  openrouter: 'openai/gpt-4o-mini',
+  openrouter: 'tngtech/deepseek-r1t2-chimera:free',
   google: 'gemini-3-flash-preview',
-  groq: 'llama-3.1-8b-instant',
+  groq: 'openai/gpt-oss-120b',
 };
 
 const PROVIDER_ENDPOINTS: Record<ApiProvider, string> = {

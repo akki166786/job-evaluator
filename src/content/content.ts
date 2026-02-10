@@ -99,24 +99,34 @@ function parseJsonLdJob(): Partial<JobData> | null {
 export function extractJobData(): JobData | null {
   const jsonLd = parseJsonLdJob();
   const jobId = getJobIdFromDom() ?? getJobIdFromUrl() ?? jsonLd?.id ?? '';
-  // Title selectors — targets /jobs/view (unified top card), /jobs/search, and /jobs/collections
+
+  // Title selectors — /jobs/view, /jobs/search, /jobs/collections detail pane
   const titleSelectors = [
-    '.job-details-jobs-unified-top-card__job-title', // /jobs/view (2024+ layout)
-    'h1.t-24',                                       // older /jobs/view layout
-    '[data-job-id] h1',                              // generic fallback
-    '.jobs-unified-top-card__job-title',             // legacy /jobs/view
-    'h1',                                            // last resort
+    '.job-details-jobs-unified-top-card__job-title',       // /jobs/view (2024+ layout)
+    '.jobs-search__job-details h2.t-24',                   // /jobs/search detail pane heading
+    '.jobs-details h2.t-24',                               // /jobs/collections detail pane heading
+    '.jobs-details-top-card__job-title',                   // collections/search top card
+    'h1.t-24',                                             // older /jobs/view layout
+    '[data-job-id] h1',                                    // generic fallback with data attr
+    '.jobs-unified-top-card__job-title',                   // legacy /jobs/view
+    '.job-details h1',                                     // generic detail pane
+    '.jobs-search__job-details h1',                        // search detail pane h1
+    'h1',                                                  // last resort
   ];
   const titleEl = queryOne(titleSelectors);
   const title = getText(titleEl ?? document.querySelector('h1')) || jsonLd?.title || getMetaContent('og:title');
 
   // Description selectors — /jobs/view main body, search/collections detail pane
   const descSelectors = [
-    '.jobs-description__content',                     // /jobs/view primary
-    '.jobs-description-content__text',                // /jobs/view variant
-    '[data-job-id] .jobs-box__html-content',          // detail pane in search/collections
-    '.show-more-less-html',                           // expandable description wrapper
-    '.jobs-box .jobs-box__html-content',              // legacy fallback
+    '.jobs-description__content',                          // /jobs/view primary
+    '.jobs-description-content__text',                     // /jobs/view variant
+    '.jobs-search__job-details .jobs-box__html-content',   // search detail pane
+    '.jobs-details .jobs-box__html-content',               // collections detail pane
+    '#job-details',                                        // common detail container ID
+    '[data-job-id] .jobs-box__html-content',               // detail pane with data attr
+    '.jobs-description',                                   // generic description container
+    '.show-more-less-html',                                // expandable description wrapper
+    '.jobs-box .jobs-box__html-content',                   // legacy fallback
   ];
   const descEl = queryOne(descSelectors) ?? document.querySelector('.jobs-description__content');
   const description =
@@ -128,8 +138,10 @@ export function extractJobData(): JobData | null {
   const locationSelectors = [
     '.job-details-jobs-unified-top-card__primary-description-container', // /jobs/view (2024+)
     '.jobs-unified-top-card__primary-description',                      // legacy /jobs/view
+    '.jobs-details-top-card__company-info',                             // collections top card
     '.job-details-how-you-match__secondary-description',                // match section
     '[data-job-id] span[class*="primary-description"]',                 // generic fallback
+    '.jobs-search__job-details .jobs-unified-top-card__subtitle',       // search detail pane
   ];
   const locationEl = queryOne(locationSelectors);
   let location = getText(locationEl) || jsonLd?.location || getMetaContent('og:location');
@@ -147,6 +159,22 @@ export function extractJobData(): JobData | null {
   };
 }
 
+/**
+ * Retry extractJobData with delays — on collections/search pages the job detail
+ * pane loads asynchronously, so the DOM may not be ready on the first attempt.
+ */
+async function extractJobDataWithRetry(maxRetries = 5, delayMs = 600): Promise<JobData | null> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const job = extractJobData();
+    if (job && (job.title !== 'Unknown title' || job.description)) return job;
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  // Final attempt — return whatever we got (may be null)
+  return extractJobData();
+}
+
 // Listen for message from popup / service worker
 chrome.runtime.onMessage.addListener(
   (
@@ -155,13 +183,15 @@ chrome.runtime.onMessage.addListener(
     sendResponse: (r: { ok: boolean; job?: JobData; error?: string }) => void
   ) => {
     if (msg.type === 'GET_JOB_DATA') {
-      try {
-        const job = extractJobData();
-        if (job) sendResponse({ ok: true, job });
-        else sendResponse({ ok: false, error: 'Could not read job details from this page.' });
-      } catch (e) {
-        sendResponse({ ok: false, error: (e as Error).message });
-      }
+      // Use retry to handle async-loaded detail panes on collections/search pages
+      extractJobDataWithRetry()
+        .then((job) => {
+          if (job) sendResponse({ ok: true, job });
+          else sendResponse({ ok: false, error: 'Could not read job details from this page. Make sure a job is selected.' });
+        })
+        .catch((e) => {
+          sendResponse({ ok: false, error: (e as Error).message });
+        });
     }
     return true; // keep channel open for async sendResponse
   }
