@@ -162,6 +162,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     getSetting('ollamaModel'),
     getLegacyApiKey(),
   ]);
+  // Migrate legacy single apiKey (v1) to per-provider apiKeys map (v2)
   const normalizedApiKeys = apiKeys && Object.keys(apiKeys).length > 0 ? apiKeys : {};
   if (legacyApiKey && !normalizedApiKeys[apiProvider]) {
     normalizedApiKeys[apiProvider] = legacyApiKey;
@@ -215,7 +216,8 @@ async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
       }
       const toDelete = count - MAX_JOB_EVALS;
       let deleted = 0;
-      index.openCursor().onsuccess = (event) => {
+      const cursorReq = index.openCursor();
+      cursorReq.onsuccess = (event) => {
         const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
         if (!cursor) {
           resolve();
@@ -229,6 +231,7 @@ async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
         }
         cursor.continue();
       };
+      cursorReq.onerror = () => reject(cursorReq.error);
     };
     countReq.onerror = () => reject(countReq.error);
   });

@@ -26,9 +26,22 @@ function getDescriptionText(container: Element | null): string {
   return getText(container);
 }
 
+/**
+ * Extract job ID from the URL.
+ * Supports:
+ *   - /jobs/view/12345...         (direct job view)
+ *   - /jobs/collections/...?currentJobId=12345  (collections)
+ *   - /jobs/search/...?currentJobId=12345       (search results)
+ */
 function getJobIdFromUrl(): string | null {
-  const match = window.location.href.match(/\/jobs\/view\/(\d+)/);
-  return match ? match[1] : null;
+  const url = new URL(window.location.href);
+  // Direct job view page: /jobs/view/<id>
+  const viewMatch = url.pathname.match(/\/jobs\/view\/(\d+)/);
+  if (viewMatch) return viewMatch[1];
+  // Collections or search: ?currentJobId=<id>
+  const currentJobId = url.searchParams.get('currentJobId');
+  if (currentJobId && /^\d+$/.test(currentJobId)) return currentJobId;
+  return null;
 }
 
 function getJobIdFromDom(): string | null {
@@ -86,24 +99,24 @@ function parseJsonLdJob(): Partial<JobData> | null {
 export function extractJobData(): JobData | null {
   const jsonLd = parseJsonLdJob();
   const jobId = getJobIdFromDom() ?? getJobIdFromUrl() ?? jsonLd?.id ?? '';
-  // Title: common patterns on job view page
+  // Title selectors — targets /jobs/view (unified top card), /jobs/search, and /jobs/collections
   const titleSelectors = [
-    '.job-details-jobs-unified-top-card__job-title',
-    'h1.t-24',
-    '[data-job-id] h1',
-    '.jobs-unified-top-card__job-title',
-    'h1',
+    '.job-details-jobs-unified-top-card__job-title', // /jobs/view (2024+ layout)
+    'h1.t-24',                                       // older /jobs/view layout
+    '[data-job-id] h1',                              // generic fallback
+    '.jobs-unified-top-card__job-title',             // legacy /jobs/view
+    'h1',                                            // last resort
   ];
   const titleEl = queryOne(titleSelectors);
   const title = getText(titleEl ?? document.querySelector('h1')) || jsonLd?.title || getMetaContent('og:title');
 
-  // Description: main job description body
+  // Description selectors — /jobs/view main body, search/collections detail pane
   const descSelectors = [
-    '.jobs-description__content',
-    '.jobs-description-content__text',
-    '[data-job-id] .jobs-box__html-content',
-    '.show-more-less-html',
-    '.jobs-box .jobs-box__html-content',
+    '.jobs-description__content',                     // /jobs/view primary
+    '.jobs-description-content__text',                // /jobs/view variant
+    '[data-job-id] .jobs-box__html-content',          // detail pane in search/collections
+    '.show-more-less-html',                           // expandable description wrapper
+    '.jobs-box .jobs-box__html-content',              // legacy fallback
   ];
   const descEl = queryOne(descSelectors) ?? document.querySelector('.jobs-description__content');
   const description =
@@ -111,12 +124,12 @@ export function extractJobData(): JobData | null {
     jsonLd?.description ||
     getMetaContent('description');
 
-  // Location: often in top card or sidebar
+  // Location selectors — top card metadata area or sidebar
   const locationSelectors = [
-    '.job-details-jobs-unified-top-card__primary-description-container',
-    '.jobs-unified-top-card__primary-description',
-    '.job-details-how-you-match__secondary-description',
-    '[data-job-id] span[class*="primary-description"]',
+    '.job-details-jobs-unified-top-card__primary-description-container', // /jobs/view (2024+)
+    '.jobs-unified-top-card__primary-description',                      // legacy /jobs/view
+    '.job-details-how-you-match__secondary-description',                // match section
+    '[data-job-id] span[class*="primary-description"]',                 // generic fallback
   ];
   const locationEl = queryOne(locationSelectors);
   let location = getText(locationEl) || jsonLd?.location || getMetaContent('og:location');

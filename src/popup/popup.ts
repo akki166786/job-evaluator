@@ -26,16 +26,27 @@ const negativeFiltersEl = document.getElementById('negativeFilters') as HTMLText
 const apiProviderEl = document.getElementById('apiProvider') as HTMLSelectElement;
 const apiKeyWrap = document.getElementById('apiKeyWrap')!;
 const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
+const apiKeyLabelEl = document.getElementById('apiKeyLabel')!;
 const ollamaModelWrap = document.getElementById('ollamaModelWrap')!;
 const ollamaModelEl = document.getElementById('ollamaModel') as HTMLInputElement;
 const saveSettingsBtn = document.getElementById('saveSettings')!;
 let apiKeys: Partial<Record<ApiProvider, string>> = {};
+
+const PROVIDER_LABELS: Record<ApiProvider, string> = {
+  ollama: 'Ollama',
+  groq: 'Groq',
+  google: 'Google',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  openrouter: 'OpenRouter',
+};
 
 function showApiKeyField() {
   const provider = apiProviderEl.value as ApiProvider;
   const needKey = provider !== 'ollama';
   apiKeyWrap.classList.toggle('hidden', !needKey);
   apiKeyEl.value = apiKeys[provider] ?? '';
+  apiKeyLabelEl.textContent = `${PROVIDER_LABELS[provider]} API key`;
   ollamaModelWrap.classList.toggle('hidden', provider !== 'ollama');
 }
 
