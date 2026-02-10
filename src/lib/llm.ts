@@ -8,7 +8,7 @@ const OLLAMA_TIMEOUT_MS = 180_000; // local model can be slow on CPU
 const PROVIDER_MODELS: Record<ApiProvider, string> = {
   ollama: 'llama3.1:8b',
   openai: 'gpt-4o-mini',
-  anthropic: 'claude-3-haiku-20240307',
+  anthropic: 'claude-haiku-4-5',
   openrouter: 'openai/gpt-4o-mini',
   google: 'gemini-3-flash-preview',
   groq: 'llama-3.1-8b-instant',
