@@ -16,6 +16,7 @@ const SETTINGS_KEYS = [
   'apiProvider',
   'apiKeys',
   'ollamaModel',
+  'providerModels',
 ] as const;
 
 function openDB(): Promise<IDBDatabase> {
@@ -152,14 +153,23 @@ async function setSetting<K extends (typeof SETTINGS_KEYS)[number]>(
 
 /** Settings store uses key-value; we use a single object in API for convenience. */
 export async function getSettings(): Promise<SettingsRecord> {
-  const [profileIntent, skillsTechStack, negativeFilters, apiProvider, apiKeys, ollamaModel, legacyApiKey] =
-    await Promise.all([
+  const [
+    profileIntent,
+    skillsTechStack,
+    negativeFilters,
+    apiProvider,
+    apiKeys,
+    ollamaModel,
+    providerModels,
+    legacyApiKey,
+  ] = await Promise.all([
     getSetting('profileIntent'),
     getSetting('skillsTechStack'),
     getSetting('negativeFilters'),
     getSetting('apiProvider'),
     getSetting('apiKeys'),
     getSetting('ollamaModel'),
+    getSetting('providerModels').catch(() => undefined),
     getLegacyApiKey(),
   ]);
   // Migrate legacy single apiKey (v1) to per-provider apiKeys map (v2)
@@ -168,7 +178,22 @@ export async function getSettings(): Promise<SettingsRecord> {
     normalizedApiKeys[apiProvider] = legacyApiKey;
     await saveSettings({ apiKeys: normalizedApiKeys });
   }
-  return { profileIntent, skillsTechStack, negativeFilters, apiProvider, apiKeys: normalizedApiKeys, ollamaModel };
+  // Normalize providerModels (may be missing in old DB)
+  const normalizedProviderModels =
+    providerModels && typeof providerModels === 'object' ? { ...providerModels } : {};
+  // Migrate ollamaModel into providerModels.ollama so one code path handles all providers
+  if (ollamaModel && !normalizedProviderModels.ollama) {
+    normalizedProviderModels.ollama = ollamaModel;
+  }
+  return {
+    profileIntent,
+    skillsTechStack,
+    negativeFilters,
+    apiProvider,
+    apiKeys: normalizedApiKeys,
+    ollamaModel,
+    providerModels: normalizedProviderModels,
+  };
 }
 
 export async function saveSettings(settings: Partial<SettingsRecord>): Promise<void> {

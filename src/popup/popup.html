@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LinkedIn Job Eval</title>
+  <title>AI Job Evaluator for LinkedIn (Free)</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="popup">
     <header class="header">
-      <h1 class="title">Job Eval</h1>
+      <h1 class="title">AI Job Evaluator</h1>
       <div class="header-actions">
         <button type="button" class="tab-link" data-tab="settings" aria-label="Open settings">Settings</button>
         <button type="button" class="tab-link" data-tab="resumes" aria-label="Manage resumes">Resumes</button>
+        <a href="https://github.com/akki166786/job-evaluator/blob/main/README.md" target="_blank" rel="noopener noreferrer" class="help-link" id="helpLink" aria-label="Help / More info">ℹ️ Help</a>
       </div>
     </header>
 
@@ -57,9 +58,9 @@
         <option value="anthropic">Anthropic</option>
         <option value="openrouter">OpenRouter</option>
       </select>
-      <div id="ollamaModelWrap" class="api-key-wrap">
-        <label class="label">Ollama model</label>
-        <input type="text" id="ollamaModel" class="input" placeholder="e.g. llama3.1:8b" />
+      <div id="modelWrap" class="api-key-wrap">
+        <label class="label" id="modelLabel">Model (optional)</label>
+        <input type="text" id="modelInput" class="input" placeholder="Default model" aria-labelledby="modelLabel" />
       </div>
       <div id="apiKeyWrap" class="api-key-wrap hidden">
         <label class="label" id="apiKeyLabel">API key</label>
@@ -80,6 +81,13 @@
       <p id="resumeError" class="error hidden" role="alert"></p>
       <button type="button" class="tab-link back" data-tab="main" aria-label="Back to main panel">Back</button>
     </section>
+
+    <footer class="popup-footer">
+      <a href="https://buymeacoffee.com/coachakshaytiwari" target="_blank" rel="noopener noreferrer" class="support-link" aria-label="Support on Buy Me a Coffee">
+        <span class="support-link-icon" aria-hidden="true">☕</span>
+        <span>Buy me a coffee</span>
+      </a>
+    </footer>
   </div>
   <script src="popup.js"></script>
 </body>

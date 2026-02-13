@@ -23,18 +23,22 @@ The extension reads the job title, description, and location from the page, comb
 
 | Provider | Default model | Cost | Get an API key |
 |---|---|---|---|
-| **Ollama (local)** | `llama3.1:8b` (configurable) | Free -- runs on your machine | Not needed |
-| **Groq** | `openai/gpt-oss-120b` | Free tier available | [console.groq.com](https://console.groq.com) |
+| **Ollama (local)** | `llama3.1:8b` | Free — runs on your machine | Not needed |
+| **Groq** ⭐ | `openai/gpt-oss-120b` | Free tier, no credit card | [console.groq.com](https://console.groq.com) |
 | **OpenAI** | `gpt-4o-mini` | ~$0.15 / 1M input tokens | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | **Anthropic** | `claude-haiku-4-5` | ~$1.00 / 1M input tokens | [console.anthropic.com](https://console.anthropic.com) |
 | **Google Gemini** | `gemini-3-flash-preview` | Free tier available | [aistudio.google.dev/apikey](https://aistudio.google.dev/apikey) |
 | **OpenRouter** | `tngtech/deepseek-r1t2-chimera:free` | Free | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Each provider stores its own API key separately. Switching providers in Settings loads the matching key automatically.
+> **Groq** has been giving the fastest and best results in practice. Get your free key at [console.groq.com](https://console.groq.com) — sign up, generate a key, no credit card needed.
+
+Each provider stores its own API key and model override separately. You can set a custom model per provider in **Settings > Model (optional)**; leave blank to use the default.
 
 ---
 
 ## Quick start
+
+> **Tip:** The quickest way to get started is with an API key. Groq has been giving the fastest and best results — and it's free. See [Groq setup](#groq-setup) below.
 
 ### Option 1: Cloud provider (fastest setup)
 
@@ -43,6 +47,15 @@ Each provider stores its own API key separately. Switching providers in Settings
 3. Pick a provider (e.g. **Groq** for free, fast evaluations).
 4. Paste your API key and click **Save settings**.
 5. Navigate to a LinkedIn job page and click **Evaluate this job**.
+
+#### Groq setup
+
+Groq offers a free tier with no credit card required. To get your API key:
+
+1. Go to [console.groq.com](https://console.groq.com).
+2. Sign up (or log in).
+3. Create and copy your free API key from the dashboard.
+4. Paste it in **Settings > API key** with Groq selected.
 
 ### Option 2: Ollama (fully local, no API key)
 
@@ -63,7 +76,7 @@ Each provider stores its own API key separately. Switching providers in Settings
 2. Install the extension (see [Installation](#installation) below).
 3. The default provider is already Ollama. Navigate to a LinkedIn job page and click **Evaluate this job**.
 
-> **Low RAM?** Use `ollama pull qwen2.5:3b` (~4 GB) and change the model name in **Settings > Ollama model**.
+> **Low RAM?** Use `ollama pull qwen2.5:3b` (~4 GB) and change the model name in **Settings > Model (optional)**.
 
 ---
 
@@ -72,7 +85,7 @@ Each provider stores its own API key separately. Switching providers in Settings
 ### From source (developer)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/job-evaluator.git
+git clone https://github.com/akki166786/job-evaluator.git
 cd job-evaluator
 npm install
 npm run build
@@ -97,8 +110,8 @@ Open the side panel and click **Settings**.
 | **Skills / tech stack** | Your key skills. *Example: "React, TypeScript, Node.js, AWS, PostgreSQL."* |
 | **Negative filters** | Hard deal-breakers. *Example: "No Java-only, no on-site US, no mandatory Dutch."* |
 | **Provider** | Choose Ollama, Groq, OpenAI, Anthropic, Google Gemini, or OpenRouter. |
+| **Model (optional)** | Override the default model for the selected provider. Leave blank to use the built-in default. |
 | **API key** | Shown for cloud providers. Paste the key from your provider's dashboard. |
-| **Ollama model** | Shown when Ollama is selected. Override the default model name. |
 
 Click **Save settings**. Your configuration persists across browser restarts.
 
@@ -153,6 +166,12 @@ It reads the selected job's details from whichever page you're on.
 | **Evaluation is slow** | Ollama on CPU can take 1--3 min. Cloud providers respond in seconds. Keep the panel open. |
 | **"model requires more system memory"** | Switch to a smaller Ollama model (e.g. `qwen2.5:3b`). |
 | **Button is disabled** | You're not on a LinkedIn job page, or the API key is missing for a cloud provider. |
+
+---
+
+## Support
+
+If this extension helps you, consider [buying me a coffee](https://buymeacoffee.com/coachakshaytiwari) ☕ — it helps keep the project going.
 
 ---
 

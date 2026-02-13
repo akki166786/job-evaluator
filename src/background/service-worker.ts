@@ -1,6 +1,6 @@
 import { getSettings, getAllResumes } from '../lib/db';
-import { evaluateJob } from '../lib/llm';
-import type { JobData, EvaluationResult } from '../lib/types';
+import { evaluateJob, PROVIDER_MODELS } from '../lib/llm';
+import type { JobData, EvaluationResult, ApiProvider } from '../lib/types';
 
 // Open side panel when user clicks the extension icon (no popup = stays open when clicking elsewhere)
 chrome.action.onClicked.addListener((tab) => {
@@ -32,15 +32,21 @@ chrome.runtime.onMessage.addListener(
         } else {
           resumes = [];
         }
+        const provider = settings.apiProvider as ApiProvider;
+        const effectiveModel =
+          provider === 'ollama'
+            ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() ||
+              PROVIDER_MODELS.ollama
+            : (settings.providerModels?.[provider]?.trim() || PROVIDER_MODELS[provider]);
         const result = await evaluateJob(
           msg.job!,
           resumes,
           settings.profileIntent,
           settings.skillsTechStack,
           settings.negativeFilters,
-          settings.apiProvider,
+          provider,
           settings.apiKeys?.[settings.apiProvider] ?? '',
-          settings.ollamaModel
+          effectiveModel
         );
         sendResponse(result);
       } catch (e) {
