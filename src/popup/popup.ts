@@ -8,6 +8,7 @@ import {
   getJobEvaluation,
   saveJobEvaluation,
 } from '../lib/db';
+import { PROVIDER_MODELS } from '../lib/llm';
 import type { ResumeRecord, EvaluationResult, ApiProvider, JobData } from '../lib/types';
 
 // --- Tab switching (main = resume checkboxes + evaluate; settings / resumes = panels) ---
@@ -19,6 +20,16 @@ document.querySelectorAll('.tab-link').forEach((el) => {
   });
 });
 
+// --- External links: open in new tab (extension popups need this) ---
+document.querySelectorAll<HTMLAnchorElement>('.support-link, #helpLink').forEach((el) => {
+  if (el?.href) {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: el.href });
+    });
+  }
+});
+
 // --- Settings ---
 const profileIntentEl = document.getElementById('profileIntent') as HTMLTextAreaElement;
 const skillsTechStackEl = document.getElementById('skillsTechStack') as HTMLTextAreaElement;
@@ -27,10 +38,11 @@ const apiProviderEl = document.getElementById('apiProvider') as HTMLSelectElemen
 const apiKeyWrap = document.getElementById('apiKeyWrap')!;
 const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
 const apiKeyLabelEl = document.getElementById('apiKeyLabel')!;
-const ollamaModelWrap = document.getElementById('ollamaModelWrap')!;
-const ollamaModelEl = document.getElementById('ollamaModel') as HTMLInputElement;
+const modelWrap = document.getElementById('modelWrap')!;
+const modelEl = document.getElementById('modelInput') as HTMLInputElement;
 const saveSettingsBtn = document.getElementById('saveSettings')!;
 let apiKeys: Partial<Record<ApiProvider, string>> = {};
+let providerModels: Partial<Record<ApiProvider, string>> = {};
 
 const PROVIDER_LABELS: Record<ApiProvider, string> = {
   ollama: 'Ollama',
@@ -41,25 +53,43 @@ const PROVIDER_LABELS: Record<ApiProvider, string> = {
   openrouter: 'OpenRouter',
 };
 
-function showApiKeyField() {
+function showProviderFields() {
   const provider = apiProviderEl.value as ApiProvider;
   const needKey = provider !== 'ollama';
   apiKeyWrap.classList.toggle('hidden', !needKey);
   apiKeyEl.value = apiKeys[provider] ?? '';
   apiKeyLabelEl.textContent = `${PROVIDER_LABELS[provider]} API key`;
-  ollamaModelWrap.classList.toggle('hidden', provider !== 'ollama');
+  modelEl.placeholder = `e.g. ${PROVIDER_MODELS[provider]}`;
+  modelEl.value = providerModels[provider] ?? '';
 }
 
-apiProviderEl.addEventListener('change', showApiKeyField);
+apiProviderEl.addEventListener('change', () => {
+  const prevProvider = (apiProviderEl.dataset.currentProvider ?? apiProviderEl.value) as ApiProvider;
+  const nextProvider = apiProviderEl.value as ApiProvider;
+  if (prevProvider && prevProvider !== nextProvider) {
+    const trimmed = modelEl.value.trim();
+    if (trimmed) providerModels[prevProvider] = trimmed;
+    else delete providerModels[prevProvider];
+  }
+  apiProviderEl.dataset.currentProvider = nextProvider;
+  showProviderFields();
+});
 
 saveSettingsBtn.addEventListener('click', async () => {
   const provider = apiProviderEl.value as ApiProvider;
   const trimmedKey = apiKeyEl.value.trim();
+  const trimmedModel = modelEl.value.trim();
   const nextApiKeys = { ...apiKeys };
   if (trimmedKey) {
     nextApiKeys[provider] = trimmedKey;
   } else {
     delete nextApiKeys[provider];
+  }
+  const nextProviderModels = { ...providerModels };
+  if (trimmedModel) {
+    nextProviderModels[provider] = trimmedModel;
+  } else {
+    delete nextProviderModels[provider];
   }
   await saveSettings({
     profileIntent: profileIntentEl.value.trim(),
@@ -67,9 +97,11 @@ saveSettingsBtn.addEventListener('click', async () => {
     negativeFilters: negativeFiltersEl.value.trim(),
     apiProvider: provider,
     apiKeys: nextApiKeys,
-    ollamaModel: ollamaModelEl.value.trim(),
+    ollamaModel: nextProviderModels.ollama ?? 'llama3.1:8b',
+    providerModels: nextProviderModels,
   });
   apiKeys = nextApiKeys;
+  providerModels = nextProviderModels;
   saveSettingsBtn.textContent = 'Saved';
   setTimeout(() => (saveSettingsBtn.textContent = 'Save settings'), 1500);
   const resumeHint = document.getElementById('resumeHint');
@@ -85,9 +117,10 @@ async function loadSettings() {
   skillsTechStackEl.value = s.skillsTechStack;
   negativeFiltersEl.value = s.negativeFilters;
   apiProviderEl.value = s.apiProvider;
+  apiProviderEl.dataset.currentProvider = s.apiProvider;
   apiKeys = s.apiKeys ?? {};
-  ollamaModelEl.value = s.ollamaModel || 'llama3.1:8b';
-  showApiKeyField();
+  providerModels = s.providerModels ?? {};
+  showProviderFields();
   const resumeHint = document.getElementById('resumeHint');
   if (resumeHint) {
     resumeHint.textContent =

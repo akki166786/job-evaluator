@@ -5,7 +5,8 @@ const OLLAMA_ENDPOINT = 'http://localhost:11434/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 60_000;
 const OLLAMA_TIMEOUT_MS = 180_000; // local model can be slow on CPU
 
-const PROVIDER_MODELS: Record<ApiProvider, string> = {
+/** Default model per provider; used when user does not set a custom model. */
+export const PROVIDER_MODELS: Record<ApiProvider, string> = {
   ollama: 'llama3.1:8b',
   openai: 'gpt-4o-mini',
   anthropic: 'claude-haiku-4-5',
@@ -234,19 +235,18 @@ export async function evaluateJob(
   negativeFilters: string,
   provider: ApiProvider,
   apiKey: string,
-  ollamaModel: string
+  model: string
 ): Promise<EvaluationResult> {
   if (provider !== 'ollama' && !apiKey) {
     throw new Error('API key required for this provider.');
   }
 
-  const model = provider === 'ollama' && ollamaModel ? ollamaModel : PROVIDER_MODELS[provider];
   const endpoint = PROVIDER_ENDPOINTS[provider];
   const userPrompt = buildUserPrompt(job, profileIntent, skillsTechStack, negativeFilters, resumes);
 
   if (provider === 'anthropic') {
     const body = {
-      model,
+      model: model || PROVIDER_MODELS[provider],
       max_tokens: 1024,
       messages: [
         { role: 'user', content: `${SYSTEM_PROMPT}\n\n${userPrompt}` },
@@ -281,7 +281,8 @@ export async function evaluateJob(
   }
 
   if (provider === 'google') {
-    const googleEndpoint = `${PROVIDER_ENDPOINTS[provider]}/${model}:generateContent`;
+    const effectiveModel = model || PROVIDER_MODELS[provider];
+    const googleEndpoint = `${PROVIDER_ENDPOINTS[provider]}/${effectiveModel}:generateContent`;
     const body = {
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -319,8 +320,9 @@ export async function evaluateJob(
   }
 
   // OpenAI-compatible (Ollama, OpenAI, Groq, OpenRouter)
+  const effectiveModel = model || PROVIDER_MODELS[provider];
   const body = {
-    model,
+    model: effectiveModel,
     max_tokens: 1024,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },

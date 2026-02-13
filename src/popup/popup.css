@@ -51,6 +51,24 @@ body {
   background: #f0f0f0;
 }
 
+.help-link {
+  padding: 6px 12px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.help-link:hover {
+  background: #f0f0f0;
+}
+
 .tab-link.back {
   margin-top: 8px;
   align-self: flex-start;
@@ -367,4 +385,45 @@ body {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Support / Buy Me a Coffee footer */
+.popup-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.support-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #ffdd00 0%, #ffb347 100%);
+  color: #1a1a1a;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.support-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(255, 179, 71, 0.4);
+}
+
+.support-link:focus-visible {
+  outline: 2px solid #ffb347;
+  outline-offset: 2px;
+}
+
+.support-link-icon {
+  font-size: 14px;
+  line-height: 1;
 }

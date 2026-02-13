@@ -1,7 +1,7 @@
 {
   "name": "linkedin-job-eval",
   "version": "1.0.0",
-  "description": "AI-assisted LinkedIn job evaluation — is this job worth applying?",
+  "description": "Evaluate LinkedIn jobs against your resume and career goals before you apply. Free, private, and user-controlled.",
   "private": true,
   "scripts": {
     "build": "node build.mjs",

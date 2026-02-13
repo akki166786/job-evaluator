@@ -22,6 +22,8 @@ export interface SettingsRecord {
   apiProvider: ApiProvider;
   apiKeys: Partial<Record<ApiProvider, string>>;
   ollamaModel: string;
+  /** Per-provider model override; when empty for a provider, app uses default model. */
+  providerModels?: Partial<Record<ApiProvider, string>>;
 }
 
 export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'groq';
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: SettingsRecord = {
   apiProvider: 'ollama',
   apiKeys: {},
   ollamaModel: 'llama3.1:8b',
+  providerModels: {},
 };
 
 /** Result of the evaluation (from LLM, parsed JSON). */
