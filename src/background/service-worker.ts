@@ -1,4 +1,4 @@
-import { getSettings, getAllResumes } from '../lib/db';
+import { getSettings, getAllResumes, getJobEvaluation } from '../lib/db';
 import { evaluateJob, PROVIDER_MODELS } from '../lib/llm';
 import type { JobData, EvaluationResult, ApiProvider } from '../lib/types';
 
@@ -9,12 +9,36 @@ chrome.action.onClicked.addListener((tab) => {
   }
 });
 
+const PENDING_JOB_KEY = 'pendingJobChange';
+
 chrome.runtime.onMessage.addListener(
   (
-    msg: { type: string; job?: JobData; resumeIds?: string[] },
-    _sender: chrome.runtime.MessageSender,
-    sendResponse: (r: { error?: string; raw?: string } | EvaluationResult) => void
+    msg: {
+      type: string;
+      job?: JobData;
+      resumeIds?: string[];
+      url?: string;
+      jobIds?: string[];
+    },
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (r: { error?: string; raw?: string; scores?: Record<string, number> } | EvaluationResult) => void
   ) => {
+    if (msg.type === 'JOB_PAGE_CHANGED' && sender.tab?.id != null && msg.url) {
+      chrome.storage.session.set({ [PENDING_JOB_KEY]: { tabId: sender.tab.id, url: msg.url } }).catch(() => {});
+      sendResponse({});
+      return false;
+    }
+    if (msg.type === 'GET_CACHED_SCORES_FOR_JOBS' && Array.isArray(msg.jobIds)) {
+      (async () => {
+        const scores: Record<string, number> = {};
+        for (const id of msg.jobIds!) {
+          const rec = await getJobEvaluation(id).catch(() => null);
+          if (rec != null) scores[id] = rec.score;
+        }
+        sendResponse({ scores });
+      })();
+      return true;
+    }
     if (msg.type !== 'EVALUATE_JOB' || !msg.job) {
       sendResponse({ error: 'Missing job data.' });
       return true;

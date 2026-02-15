@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Job Evaluator for LinkedIn (Free)",
-  "version": "1.0.0",
+  "version": "1.0.21",
   "description": "Evaluate LinkedIn jobs against your resume and career goals before you apply. Free, private, and user-controlled.",
   "icons": {
     "16": "icons/icon16.png",
@@ -9,10 +9,17 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["activeTab", "storage", "scripting", "sidePanel", "tabs"],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "sidePanel",
+    "tabs"
+  ],
   "host_permissions": [
     "*://www.linkedin.com/*",
     "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
     "https://api.openai.com/*",
@@ -33,19 +40,17 @@
   "background": {
     "service_worker": "service-worker.js"
   },
-  "web_accessible_resources": [
-    {
-      "resources": ["pdf.worker.mjs"],
-      "matches": ["<all_urls>"]
-    }
-  ],
+  "web_accessible_resources": [],
   "content_scripts": [
     {
       "matches": [
         "*://www.linkedin.com/jobs/view/*",
-        "*://www.linkedin.com/jobs/collections/*","*://www.linkedin.com/jobs/search/*"
+        "*://www.linkedin.com/jobs/collections/*",
+        "*://www.linkedin.com/jobs/search/*"
       ],
-      "js": ["content.js"]
+      "js": [
+        "content.js"
+      ]
     }
   ]
 }
