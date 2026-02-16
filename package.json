@@ -1,6 +1,6 @@
 {
   "name": "linkedin-job-eval",
-  "version": "1.0.39",
+  "version": "1.0.52",
   "description": "Evaluate LinkedIn jobs against your resume and career goals before you apply. Free, private, and user-controlled.",
   "private": true,
   "scripts": {

@@ -458,8 +458,37 @@ body {
 }
 
 .error-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: #ffebee;
   color: #c62828;
+}
+
+.error-wrap .error {
+  flex: 1;
+  margin: 0;
+}
+
+.error-retry-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(198, 40, 40, 0.15);
+  color: #c62828;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.error-retry-btn:hover {
+  background: rgba(198, 40, 40, 0.25);
 }
 
 .result-wrap {
@@ -468,8 +497,7 @@ body {
   background: #fff;
   border: 1px solid #ddd;
   border-radius: 8px;
-  max-height: 240px;
-  overflow-y: auto;
+  height: fit-content;
 }
 
 .result-content {

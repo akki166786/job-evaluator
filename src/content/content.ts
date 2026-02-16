@@ -37,6 +37,15 @@ function getText(el: Element | null): string {
   return (el.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** Text content of container excluding the subtree matching excludeSelector (e.g. our badge). */
+function getTextExcluding(container: Element | null, excludeSelector: string): string {
+  if (!container) return '';
+  const clone = container.cloneNode(true) as Element;
+  const exclude = clone.querySelector(excludeSelector);
+  if (exclude) exclude.remove();
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 /** Try multiple selectors; return first non-empty. */
 function queryOne(selectors: string[]): Element | null {
   for (const sel of selectors) {
@@ -178,12 +187,39 @@ export function extractJobData(): JobData | null {
     if (locSpan) location = getText(locSpan.parentElement);
   }
 
+  // Company — scoped to job detail pane (right side / main content), not left list
+  const companySelectors = [
+    '.job-details-jobs-unified-top-card__company-name',
+    '.jobs-search__job-details .artdeco-entity-lockup__subtitle',
+    '.jobs-details .artdeco-entity-lockup__subtitle',
+    '.jobs-search__job-details .jobs-unified-top-card__subtitle',
+    '.job-details-jobs-unified-top-card a[href*="/company/"]',
+    '.jobs-details-top-card__company-info',
+    '.jobs-unified-top-card__subtitle',
+  ];
+  let company = '';
+  for (const sel of companySelectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const t = getText(el).trim();
+      if (t && t.length < 200) {
+        company = t;
+        break;
+      }
+    }
+  }
+  if (!company) {
+    const companyLink = document.querySelector('.jobs-unified-top-card__subtitle a[href*="/company/"], .job-details-jobs-unified-top-card a[href*="/company/"]');
+    if (companyLink) company = getText(companyLink).trim();
+  }
+
   if (!title && !description) return null;
   return {
     id: jobId || `${title}-${location}`.trim() || 'unknown',
     title: title || 'Unknown title',
     description: description || '',
     location: location || '',
+    ...(company ? { company: company.trim() } : {}),
   };
 }
 
@@ -291,9 +327,16 @@ const JOB_CARD_TITLE_SELECTORS = [
   'a[href*="/jobs/view/"]',
 ];
 
+/** Company name on a job card (under the title). */
+const JOB_CARD_COMPANY_SELECTORS = [
+  '.artdeco-entity-lockup__subtitle',
+  '[class*="job-card"][class*="subtitle"]',
+];
+
 export interface LeftPaneJob {
   id: string;
   title: string;
+  company: string;
 }
 
 function getLeftPaneJobs(): LeftPaneJob[] {
@@ -328,7 +371,15 @@ function getLeftPaneJobs(): LeftPaneJob[] {
       }
     }
     if (!title) title = getText(el).slice(0, 80) || id;
-    jobs.push({ id, title });
+    let company = '';
+    for (const subSel of JOB_CARD_COMPANY_SELECTORS) {
+      const sub = el.querySelector(subSel);
+      if (sub && getText(sub)) {
+        company = getTextExcluding(sub, '.job-eval-recently-visited-badge').trim().slice(0, 120);
+        break;
+      }
+    }
+    jobs.push({ id, title, company });
   });
   return jobs;
 }
@@ -357,6 +408,15 @@ function selectJobById(jobId: string): boolean {
 
 const JOB_EVAL_CARD_CLASS = 'job-eval-card-anchor';
 const JOB_EVAL_EVALUATING_CLASS = 'job-eval-evaluating';
+const JOB_EVAL_RECENTLY_VISITED_CLASS = 'job-eval-recently-visited-badge';
+/** Set true to log badge apply/observer/schedule to console for flicker debugging. */
+const DEBUG_RECENTLY_VISITED = true;
+const VISITED_COMPANIES_STORAGE_KEY = 'jobEvalVisitedCompanies';
+const VISITED_COMPANIES_MAX = 500;
+const RECENTLY_VISITED_DAYS = 30;
+/** Evict from storage companies older than this (days). */
+const VISITED_STORAGE_MAX_AGE_DAYS = 7;
+
 const jobScoreWidgetStyles = `
   .${JOB_EVAL_CARD_CLASS} { position: relative; }
   .${JOB_EVAL_WIDGET_CONTAINER} {
@@ -378,6 +438,12 @@ const jobScoreWidgetStyles = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
+  .${JOB_EVAL_RECENTLY_VISITED_CLASS} {
+    display: inline-flex; align-items: center;
+    margin-left: 6px; font-size: 10px; font-weight: 600;
+    color: #666; background: #e8e8e8; padding: 1px 6px; border-radius: 4px;
+    white-space: nowrap;
+  }
 `;
 
 let injectedStyles = false;
@@ -392,6 +458,59 @@ function ensureScoreWidgetStyles() {
 
 const jobScores = new Map<string, number>();
 const evaluatingJobIds = new Set<string>();
+
+/** Company name (normalized) -> last visit timestamp. Loaded from storage, updated when we record a visit. */
+let visitedCompaniesMap: Record<string, number> = {};
+
+function normalizeCompany(name: string): string {
+  return (name || '').trim();
+}
+
+function pruneVisitedCompaniesOlderThanWeek(): void {
+  const cutoff = Date.now() - VISITED_STORAGE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  Object.entries(visitedCompaniesMap).forEach(([key, ts]) => {
+    if (ts < cutoff) delete visitedCompaniesMap[key];
+  });
+}
+
+function loadVisitedCompanies(cb?: () => void) {
+  try {
+    chrome.storage.local.get(VISITED_COMPANIES_STORAGE_KEY, (result) => {
+      try {
+        const raw = result?.[VISITED_COMPANIES_STORAGE_KEY];
+        visitedCompaniesMap = typeof raw === 'object' && raw !== null ? raw : {};
+        pruneVisitedCompaniesOlderThanWeek();
+        chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => cb?.());
+        return;
+      } catch {
+        visitedCompaniesMap = {};
+      }
+      cb?.();
+    });
+  } catch {
+    visitedCompaniesMap = {};
+    cb?.();
+  }
+}
+
+function recordVisitedCompany(company: string) {
+  const key = normalizeCompany(company);
+  if (!key) return;
+  const now = Date.now();
+  visitedCompaniesMap[key] = now;
+  pruneVisitedCompaniesOlderThanWeek();
+  const entries = Object.entries(visitedCompaniesMap);
+  if (entries.length > VISITED_COMPANIES_MAX) {
+    const sorted = entries.sort((a, b) => a[1] - b[1]);
+    const toRemove = sorted.slice(0, entries.length - VISITED_COMPANIES_MAX).map(([k]) => k);
+    toRemove.forEach((k) => delete visitedCompaniesMap[k]);
+  }
+  try {
+    chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => {});
+  } catch {
+    // ignore
+  }
+}
 
 function scoreClass(score: number): string {
   if (score >= 75) return 'job-eval-high';
@@ -438,6 +557,58 @@ function applyBadgesImmediate() {
       badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
     }
   });
+  // Recently-visited badges are applied only by the dedicated interval (and once on load) to avoid flicker from repeated runs
+}
+
+function applyRecentlyVisitedBadgesImmediate(reason = 'unknown') {
+  ensureScoreWidgetStyles();
+  const jobs = getLeftPaneJobs();
+  const cutoff = Date.now() - RECENTLY_VISITED_DAYS * 24 * 60 * 60 * 1000;
+  let added = 0;
+  let removed = 0;
+  let skippedNoCard = 0;
+  let skippedNoSubtitle = 0;
+  let skippedNoCompany = 0;
+  jobs.forEach((job) => {
+    const card = getLeftPaneCardElement(job.id);
+    if (!card) {
+      skippedNoCard++;
+      return;
+    }
+    const subtitle = card.querySelector('.artdeco-entity-lockup__subtitle');
+    if (!subtitle) {
+      skippedNoSubtitle++;
+      return;
+    }
+    let badge = subtitle.querySelector(`.${JOB_EVAL_RECENTLY_VISITED_CLASS}`);
+    const key = normalizeCompany(job.company);
+    const ts = key ? visitedCompaniesMap[key] : undefined;
+    const show = ts != null && ts >= cutoff;
+    if (!key) skippedNoCompany++;
+    if (show) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = JOB_EVAL_RECENTLY_VISITED_CLASS;
+        badge.setAttribute('aria-label', 'Recently visited company');
+        badge.textContent = 'Recently visited';
+        subtitle.appendChild(badge);
+        added++;
+      }
+    } else if (badge && key) {
+      badge.remove();
+      removed++;
+    }
+  });
+  if (DEBUG_RECENTLY_VISITED) {
+    console.log(
+      '[job-eval] recently-visited badges',
+      `reason=${reason}`,
+      `jobs=${jobs.length}`,
+      `added=${added}`,
+      `removed=${removed}`,
+      `skipped(noCard/noSub/noCompany)=${skippedNoCard}/${skippedNoSubtitle}/${skippedNoCompany}`
+    );
+  }
 }
 
 function setJobScores(scores: Record<string, number>) {
@@ -497,11 +668,56 @@ function notifyJobChanged(jobId: string) {
   }
 }
 
+function getJobListContainer(): Element | null {
+  for (const sel of LEFT_PANE_LIST_SELECTORS) {
+    const el = document.querySelector(sel);
+    if (el) return el;
+  }
+  return null;
+}
+
+let recentlyVisitedBadgeDebounceId: ReturnType<typeof setTimeout> | null = null;
+const RECENTLY_VISITED_BADGE_DEBOUNCE_MS = 200;
+let jobListObserver: MutationObserver | null = null;
+
+function scheduleRecentlyVisitedBadgesOnce(caller = 'observer') {
+  if (DEBUG_RECENTLY_VISITED) console.log('[job-eval] scheduleRecentlyVisitedBadgesOnce', { caller });
+  if (recentlyVisitedBadgeDebounceId != null) clearTimeout(recentlyVisitedBadgeDebounceId);
+  recentlyVisitedBadgeDebounceId = setTimeout(() => {
+    recentlyVisitedBadgeDebounceId = null;
+    if (contextInvalidated || !isJobListPage()) return;
+    applyRecentlyVisitedBadgesImmediate(`debounce(${caller})`);
+  }, RECENTLY_VISITED_BADGE_DEBOUNCE_MS);
+}
+
+function attachJobListObserver() {
+  const list = getJobListContainer();
+  if (!list || jobListObserver != null) return;
+  if (DEBUG_RECENTLY_VISITED) console.log('[job-eval] attachJobListObserver: attached');
+  jobListObserver = new MutationObserver((mutations) => {
+    const hasAdditions = mutations.some((m) => m.addedNodes.length > 0);
+    if (hasAdditions && DEBUG_RECENTLY_VISITED) {
+      const addCount = mutations.reduce((n, m) => n + m.addedNodes.length, 0);
+      console.log('[job-eval] observer: mutations', { mutations: mutations.length, addedNodes: addCount });
+    }
+    if (hasAdditions) scheduleRecentlyVisitedBadgesOnce('observer');
+  });
+  jobListObserver.observe(list, { childList: true, subtree: true });
+}
+
 function cleanupAfterInvalidation() {
   document.removeEventListener('click', onJobListClick, true);
   if (jobPollIntervalId !== null) {
     clearInterval(jobPollIntervalId);
     jobPollIntervalId = null;
+  }
+  if (recentlyVisitedBadgeDebounceId != null) {
+    clearTimeout(recentlyVisitedBadgeDebounceId);
+    recentlyVisitedBadgeDebounceId = null;
+  }
+  if (jobListObserver != null) {
+    jobListObserver.disconnect();
+    jobListObserver = null;
   }
 }
 
@@ -557,11 +773,21 @@ function refreshScoresOnLoad() {
 // Only register in top frame so we don't run N copies (main + iframes) that all throw when context invalidates
 const isTopFrame = typeof window !== 'undefined' && window === window.top;
 if (isTopFrame && isExtensionContextValid()) {
+  loadVisitedCompanies(() => {
+    applyBadges();
+    applyRecentlyVisitedBadgesImmediate('load');
+    attachJobListObserver();
+  });
   // Show cached score tags on page load/reload (job list may render after a delay)
   refreshScoresOnLoad();
   const LOAD_DELAYS_MS = [300, 1000];
   LOAD_DELAYS_MS.forEach((delay) => {
-    setTimeout(refreshScoresOnLoad, delay);
+    setTimeout(() => {
+      refreshScoresOnLoad();
+      applyBadges();
+      attachJobListObserver();
+      scheduleRecentlyVisitedBadgesOnce('timeout');
+    }, delay);
   });
   document.addEventListener('click', onJobListClick, true);
   jobPollIntervalId = setInterval(() => {
@@ -611,8 +837,12 @@ if (isTopFrame && isExtensionContextValid()) {
                 cleanupAfterInvalidation();
                 return;
               }
-              if (job) sendResponse({ ok: true, job });
-              else sendResponse({ ok: false, error: 'Could not read job details from this page. Make sure a job is selected.' });
+              if (job) {
+                if (job.company) recordVisitedCompany(job.company);
+                sendResponse({ ok: true, job });
+              } else {
+                sendResponse({ ok: false, error: 'Could not read job details from this page. Make sure a job is selected.' });
+              }
             } catch {
               contextInvalidated = true;
               cleanupAfterInvalidation();
