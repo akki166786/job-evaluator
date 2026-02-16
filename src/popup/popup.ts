@@ -509,6 +509,8 @@ function addToProcessingList(cacheKey: string, jobId: string, title: string, for
   renderProcessingJobs();
 }
 
+const HIGH_SCORE_KEEP = 75;
+
 function updateProcessingJobDone(cacheKey: string, score: number | undefined): void {
   const id = pendingTimeouts.get(cacheKey);
   if (id) clearTimeout(id);
@@ -518,8 +520,17 @@ function updateProcessingJobDone(cacheKey: string, score: number | undefined): v
     j.status = 'done';
     j.score = score;
     renderProcessingJobs();
-    setTimeout(() => removeFromProcessingList(cacheKey), REMOVE_DONE_MS);
+    if (score == null || score < HIGH_SCORE_KEEP) {
+      setTimeout(() => removeFromProcessingList(cacheKey), REMOVE_DONE_MS);
+    }
   }
+}
+
+function scoreTierClass(score: number | undefined): string {
+  if (score == null) return 'done-fail';
+  if (score >= 75) return 'done-high';
+  if (score >= 50) return 'done-mid';
+  return 'done-low';
 }
 
 function renderProcessingJobs(): void {
@@ -531,13 +542,18 @@ function renderProcessingJobs(): void {
   }
   el.innerHTML = processingJobs
     .map(
-      (j) =>
-        `<div class="processing-job-item ${j.status}" data-cache-key="${escapeHtml(j.cacheKey)}" data-job-id="${escapeHtml(j.jobId)}" role="button" tabindex="0" title="Click to focus this job on LinkedIn">` +
-        `<span class="job-title" title="${escapeHtml(j.title)}">${escapeHtml(j.title)}</span>` +
-        (j.status === 'done'
-          ? `<span class="job-score">${j.score != null ? `${j.score}/100` : '—'}</span>`
-          : `<span class="job-pending">Evaluating…</span>`) +
-        `</div>`
+      (j) => {
+        const doneClass = j.status === 'done' ? ` ${scoreTierClass(j.score)}` : '';
+        return (
+          `<div class="processing-job-item ${j.status}${doneClass}" data-cache-key="${escapeHtml(j.cacheKey)}" data-job-id="${escapeHtml(j.jobId)}" role="button" tabindex="0" title="Click to focus this job on LinkedIn">` +
+          `<span class="job-title" title="${escapeHtml(j.title)}">${escapeHtml(j.title)}</span>` +
+          (j.status === 'done'
+            ? `<span class="job-score">${j.score != null ? `${j.score}/100` : '—'}</span>`
+            : `<span class="job-pending">Evaluating…</span>`) +
+          `<button type="button" class="processing-job-remove" data-cache-key="${escapeHtml(j.cacheKey)}" aria-label="Remove from list" title="Remove from list">×</button>` +
+          `</div>`
+        );
+      }
     )
     .join('');
 }
@@ -1009,6 +1025,17 @@ if (versionDisplay) {
   versionDisplay.textContent = v ? `v${v}` : '';
 }
 document.getElementById('processingJobsWrap')?.addEventListener('click', async (e) => {
+  const removeBtn = (e.target as HTMLElement).closest('.processing-job-remove');
+  if (removeBtn) {
+    const cacheKey = removeBtn.getAttribute('data-cache-key');
+    if (cacheKey) {
+      removeFromProcessingList(cacheKey);
+      sendEvaluatingJobsToTab();
+    }
+    e.stopPropagation();
+    e.preventDefault();
+    return;
+  }
   const item = (e.target as HTMLElement).closest('.processing-job-item');
   if (!item) return;
   const jobId = item.getAttribute('data-job-id');
