@@ -377,6 +377,8 @@ body {
 
 #evalHint {
   margin-top: 6px;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .error {
@@ -571,8 +573,6 @@ body {
 }
 
 .processing-jobs-list {
-  max-height: 180px;
-  overflow-y: auto;
   font-size: 12px;
 }
 

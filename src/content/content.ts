@@ -190,12 +190,13 @@ export function extractJobData(): JobData | null {
 /**
  * Retry extractJobData with delays — on collections/search pages the job detail
  * pane loads asynchronously, so the DOM may not be ready on the first attempt.
+ * Uses a delay between retries to avoid hammering the main thread.
  */
-async function extractJobDataWithRetry(maxRetries = 8, delayMs = 0): Promise<JobData | null> {
+async function extractJobDataWithRetry(maxRetries = 5, delayMs = 150): Promise<JobData | null> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const job = extractJobData();
     if (job && (job.title !== 'Unknown title' || job.description)) return job;
-    if (attempt < maxRetries && delayMs > 0) {
+    if (attempt < maxRetries) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -398,7 +399,17 @@ function scoreClass(score: number): string {
   return 'job-eval-low';
 }
 
+let applyBadgesScheduled = false;
 function applyBadges() {
+  if (applyBadgesScheduled) return;
+  applyBadgesScheduled = true;
+  requestAnimationFrame(() => {
+    applyBadgesScheduled = false;
+    applyBadgesImmediate();
+  });
+}
+
+function applyBadgesImmediate() {
   ensureScoreWidgetStyles();
   const allIds = new Set([...jobScores.keys(), ...evaluatingJobIds]);
   allIds.forEach((jobId) => {
@@ -495,7 +506,7 @@ function cleanupAfterInvalidation() {
 }
 
 let lastNotifiedJobId: string | null = getActiveJobIdFromDom() ?? getJobIdFromUrlString();
-const JOB_POLL_MS = 150;
+const JOB_POLL_MS = 600;
 let jobPollIntervalId: ReturnType<typeof setInterval> | null = null;
 
 function isJobListPage(): boolean {

@@ -432,6 +432,7 @@ let pendingJobForRerun: {
 
 /** Track which job we last showed so we can re-evaluate when user switches job. */
 let lastShownJobId: string | null = null;
+let lastShownJobTitle: string | null = null;
 let lastShownTabId: number | null = null;
 let jobCheckTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let isEvaluationRunning = false;
@@ -607,9 +608,9 @@ function hideBackgroundEvalState() {
   loadingWrap.querySelector('.loading-title')?.classList.remove('hidden');
 }
 
-const JOB_CHANGE_DELAY_MS = 0;
-const JOB_CHECK_RETRY_DELAY_MS = 50;
-const JOB_CHECK_MAX_RETRIES = 8;
+const JOB_CHANGE_DELAY_MS = 280;
+const JOB_CHECK_RETRY_DELAY_MS = 350;
+const JOB_CHECK_MAX_RETRIES = 5;
 
 let scheduledJobId: string | null = null;
 let scheduledTabId: number | null = null;
@@ -694,11 +695,15 @@ async function updateEvaluateHint() {
   const settings = await getSettings();
   const needKey = settings.apiProvider !== 'ollama';
   const hasKey = !!settings.apiKeys?.[settings.apiProvider]?.trim();
-  evalHint.textContent = !onJobPage
-    ? 'Open a LinkedIn job page to evaluate.'
-    : needKey && !hasKey
-      ? 'Set your API key in Settings.'
-      : 'Open a LinkedIn job page to evaluate.';
+  if (!onJobPage) {
+    evalHint.textContent = 'Open a LinkedIn job page to evaluate.';
+    return;
+  }
+  if (needKey && !hasKey) {
+    evalHint.textContent = 'Set your API key in Settings.';
+    return;
+  }
+  evalHint.textContent = lastShownJobTitle?.trim() || 'Open a LinkedIn job page to evaluate.';
 }
 
 async function runEvaluation(): Promise<void> {
@@ -756,6 +761,7 @@ async function runEvaluation(): Promise<void> {
     const cacheKey = getCacheKeyForJob(job, tab.url);
     debugLog(`Job: ${job.id} (cache key: ${cacheKey}) — ${job.title || '(no title)'}`);
     lastShownJobId = job.id;
+    lastShownJobTitle = job.title?.trim() || null;
     lastShownTabId = tab.id;
     const selectedIds = getSelectedResumeIds();
     const cached = await getJobEvaluation(cacheKey);
@@ -855,6 +861,7 @@ async function runEvaluation(): Promise<void> {
     errorText.textContent = err.message;
     errorWrap.classList.remove('hidden');
     lastShownJobId = null;
+    lastShownJobTitle = null;
     lastShownTabId = null;
   }
 }
