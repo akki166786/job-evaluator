@@ -47,7 +47,6 @@ When you click "Evaluate this job," the extension sends the following to **the L
 | Permission | Why it's needed |
 |---|---|
 | `activeTab` | Read job details from the current LinkedIn tab when you click "Evaluate." |
-| `storage` | Not currently used (IndexedDB is used instead); reserved for future use. |
 | `scripting` | Inject the content script to extract job data from LinkedIn pages. |
 | `sidePanel` | Display the extension UI in Chrome's side panel. |
 | Host permissions (LinkedIn) | Read job page content. |
