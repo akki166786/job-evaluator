@@ -409,9 +409,14 @@ resumeSaveBtn.addEventListener('click', async () => {
 const evalHint = document.getElementById('evalHint')!;
 const resultWrap = document.getElementById('resultWrap')!;
 const resultContent = document.getElementById('resultContent')!;
+const resultActions = document.getElementById('resultActions')!;
+const recalculateBtn = document.getElementById('recalculateBtn')!;
 const resultRaw = document.getElementById('resultRaw')!;
 const resultRawText = document.getElementById('resultRawText')!;
 const loadingWrap = document.getElementById('loadingWrap')!;
+const loadingHint = document.getElementById('loadingHint')!;
+const loadingSpinner = loadingWrap.querySelector('.loading-spinner');
+const loadingDots = loadingWrap.querySelector('.loading-dots');
 const errorWrap = document.getElementById('errorWrap')!;
 const errorText = document.getElementById('errorText')!;
 const cacheWrap = document.getElementById('cacheWrap')!;
@@ -430,6 +435,112 @@ let lastShownJobId: string | null = null;
 let lastShownTabId: number | null = null;
 let jobCheckTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let isEvaluationRunning = false;
+/** Cache key for the job currently shown in the panel; used to match EVALUATION_COMPLETE. */
+let currentCacheKey: string | null = null;
+
+const PROCESSING_TITLE_MAX = 45;
+const PENDING_TIMEOUT_MS = 60 * 1000;   // 1 min → mark as failed
+const REMOVE_DONE_MS = 10 * 1000;       // 10 s → remove completed
+const REMOVE_FAILED_MS = 20 * 1000;     // 20 s → remove failed
+
+interface ProcessingJob {
+  cacheKey: string;
+  jobId: string;
+  title: string;
+  status: 'pending' | 'done';
+  score?: number;
+}
+let processingJobs: ProcessingJob[] = [];
+const pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+function shortenTitle(title: string): string {
+  const t = (title || '').trim();
+  if (t.length <= PROCESSING_TITLE_MAX) return t;
+  return t.slice(0, PROCESSING_TITLE_MAX - 1) + '…';
+}
+
+/** Remove job from the processing list UI only. Cached result in IndexedDB is kept. */
+function removeFromProcessingList(cacheKey: string): void {
+  processingJobs = processingJobs.filter((j) => j.cacheKey !== cacheKey);
+  renderProcessingJobs();
+  sendEvaluatingJobsToTab();
+}
+
+/** Send current pending job IDs to the active tab so content script can show "Evaluating…" on those cards. */
+async function sendEvaluatingJobsToTab(tabId?: number): Promise<void> {
+  const ids = processingJobs.filter((j) => j.status === 'pending').map((j) => j.jobId);
+  const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+  if (!tab?.id || !isLinkedInJobPage(tab.url)) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobIds: ids });
+  } catch {
+    /* tab or content script unavailable */
+  }
+}
+
+function markAsFailed(cacheKey: string): void {
+  const id = pendingTimeouts.get(cacheKey);
+  if (id) clearTimeout(id);
+  pendingTimeouts.delete(cacheKey);
+  const j = processingJobs.find((x) => x.cacheKey === cacheKey);
+  if (j) {
+    j.status = 'done';
+    j.score = undefined;
+    renderProcessingJobs();
+    setTimeout(() => removeFromProcessingList(cacheKey), REMOVE_FAILED_MS);
+  }
+}
+
+function addToProcessingList(cacheKey: string, jobId: string, title: string, forceReplace = false): void {
+  const existing = processingJobs.find((j) => j.cacheKey === cacheKey);
+  if (existing?.status === 'pending' && !forceReplace) return;
+
+  const prevId = pendingTimeouts.get(cacheKey);
+  if (prevId) clearTimeout(prevId);
+  pendingTimeouts.delete(cacheKey);
+
+  processingJobs = processingJobs.filter((j) => j.cacheKey !== cacheKey);
+  processingJobs.unshift({ cacheKey, jobId, title: shortenTitle(title), status: 'pending' });
+  const timeoutId = setTimeout(() => {
+    pendingTimeouts.delete(cacheKey);
+    markAsFailed(cacheKey);
+  }, PENDING_TIMEOUT_MS);
+  pendingTimeouts.set(cacheKey, timeoutId);
+  renderProcessingJobs();
+}
+
+function updateProcessingJobDone(cacheKey: string, score: number | undefined): void {
+  const id = pendingTimeouts.get(cacheKey);
+  if (id) clearTimeout(id);
+  pendingTimeouts.delete(cacheKey);
+  const j = processingJobs.find((x) => x.cacheKey === cacheKey);
+  if (j) {
+    j.status = 'done';
+    j.score = score;
+    renderProcessingJobs();
+    setTimeout(() => removeFromProcessingList(cacheKey), REMOVE_DONE_MS);
+  }
+}
+
+function renderProcessingJobs(): void {
+  const el = document.getElementById('processingJobsList');
+  if (!el) return;
+  if (processingJobs.length === 0) {
+    el.innerHTML = '<p class="hint" style="margin:0;font-size:11px;">No jobs in queue.</p>';
+    return;
+  }
+  el.innerHTML = processingJobs
+    .map(
+      (j) =>
+        `<div class="processing-job-item ${j.status}" data-cache-key="${escapeHtml(j.cacheKey)}" data-job-id="${escapeHtml(j.jobId)}" role="button" tabindex="0" title="Click to focus this job on LinkedIn">` +
+        `<span class="job-title" title="${escapeHtml(j.title)}">${escapeHtml(j.title)}</span>` +
+        (j.status === 'done'
+          ? `<span class="job-score">${j.score != null ? `${j.score}/100` : '—'}</span>`
+          : `<span class="job-pending">Evaluating…</span>`) +
+        `</div>`
+    )
+    .join('');
+}
 
 const LINKEDIN_JOB_VIEW = /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+/;
 const LINKEDIN_JOB_COLLECTIONS = /^https:\/\/www\.linkedin\.com\/jobs\/collections\//;
@@ -464,9 +575,25 @@ function getCacheKeyForJob(job: JobData, tabUrl: string | undefined): string {
   return getJobIdFromUrl(tabUrl) ?? job.id;
 }
 
-const JOB_CHANGE_DELAY_MS = 2200;
-const JOB_CHECK_RETRY_DELAY_MS = 1000;
-const JOB_CHECK_MAX_RETRIES = 6;
+function showBackgroundEvalState() {
+  loadingWrap.classList.remove('hidden');
+  loadingHint.textContent = 'Evaluating in background… You can switch to another job.';
+  loadingSpinner?.classList.add('hidden');
+  loadingDots?.classList.add('hidden');
+  loadingWrap.querySelector('.loading-title')?.classList.add('hidden');
+}
+
+function hideBackgroundEvalState() {
+  loadingWrap.classList.add('hidden');
+  loadingHint.textContent = 'Waiting for model reply…';
+  loadingSpinner?.classList.remove('hidden');
+  loadingDots?.classList.remove('hidden');
+  loadingWrap.querySelector('.loading-title')?.classList.remove('hidden');
+}
+
+const JOB_CHANGE_DELAY_MS = 0;
+const JOB_CHECK_RETRY_DELAY_MS = 50;
+const JOB_CHECK_MAX_RETRIES = 8;
 
 let scheduledJobId: string | null = null;
 let scheduledTabId: number | null = null;
@@ -566,8 +693,13 @@ async function runEvaluation(): Promise<void> {
   isEvaluationRunning = true;
   debugLog('Run evaluation');
   resultWrap.classList.add('hidden');
+  resultActions.classList.add('hidden');
   errorWrap.classList.add('hidden');
   loadingWrap.classList.remove('hidden');
+  loadingHint.textContent = 'Waiting for model reply…';
+  loadingSpinner?.classList.remove('hidden');
+  loadingDots?.classList.remove('hidden');
+  loadingWrap.querySelector('.loading-title')?.classList.remove('hidden');
   cacheWrap.classList.add('hidden');
   errorText.textContent = '';
   evalHint.classList.add('hidden');
@@ -613,12 +745,23 @@ async function runEvaluation(): Promise<void> {
     const cached = await getJobEvaluation(cacheKey);
     if (cached) {
       isEvaluationRunning = false;
-      debugLog(`Using cached score: ${cached.score}/100`);
+      currentCacheKey = cacheKey;
+      debugLog(`Using cached result: ${cached.score}/100`);
       loadingWrap.classList.add('hidden');
       await updateEvaluateHint();
       evalHint.classList.remove('hidden');
-      cacheText.textContent = `Already evaluated. Cached match score: ${cached.score}/100.`;
-      cacheWrap.classList.remove('hidden');
+      const cachedResult: EvaluationResult = cached.result ?? {
+        score: cached.score,
+        verdict: 'maybe',
+        hardRejectionReason: null,
+        matchBullets: [],
+        riskBullets: [],
+        bestResumeLabel: null,
+        explanation: 'Cached score (explanation was not saved for this evaluation).',
+      };
+      showResult(cachedResult);
+      resultActions.classList.remove('hidden');
+      resultWrap.classList.remove('hidden');
       pendingJobForRerun = {
         jobId: cacheKey,
         job,
@@ -627,18 +770,29 @@ async function runEvaluation(): Promise<void> {
       };
       return;
     }
-    const settings = await getSettings();
-    debugLog(`Provider: ${settings.apiProvider} (request via background)`);
+    currentCacheKey = cacheKey;
+    if (processingJobs.some((j) => j.cacheKey === cacheKey && j.status === 'pending')) {
+      isEvaluationRunning = false;
+      debugLog(`Job ${cacheKey} already in queue, skipping`);
+      showBackgroundEvalState();
+      await updateEvaluateHint();
+      evalHint.classList.remove('hidden');
+      return;
+    }
+    debugLog(`Starting background evaluation (provider from settings)`);
     const result = await chrome.runtime.sendMessage({
       type: 'EVALUATE_JOB',
       job,
       resumeIds: selectedIds.length > 0 ? selectedIds : undefined,
+      cacheKey,
+      senderTabId: tab.id,
+      tabUrl: tab.url,
     });
     isEvaluationRunning = false;
-    loadingWrap.classList.add('hidden');
-    await updateEvaluateHint();
-    evalHint.classList.remove('hidden');
     if (result?.error) {
+      loadingWrap.classList.add('hidden');
+      await updateEvaluateHint();
+      evalHint.classList.remove('hidden');
       debugLog('Error: ' + result.error, 'error');
       errorText.textContent = result.error;
       errorWrap.classList.remove('hidden');
@@ -648,14 +802,27 @@ async function runEvaluation(): Promise<void> {
       }
       return;
     }
-    debugLog(`Score: ${(result as EvaluationResult).score} — ${(result as EvaluationResult).verdict}`);
-    showResult(result as EvaluationResult);
-    await saveJobEvaluation(cacheKey, (result as EvaluationResult).score);
+    if ((result as { pending?: boolean }).pending) {
+      addToProcessingList(cacheKey, job.id, job.title || job.id);
+      sendEvaluatingJobsToTab(tab.id);
+      showBackgroundEvalState();
+      await updateEvaluateHint();
+      evalHint.classList.remove('hidden');
+      return;
+    }
+    loadingWrap.classList.add('hidden');
+    await updateEvaluateHint();
+    evalHint.classList.remove('hidden');
+    const evalResult = result as EvaluationResult;
+    debugLog(`Score: ${evalResult.score} — ${evalResult.verdict}`);
+    showResult(evalResult);
+    resultActions.classList.add('hidden');
+    await saveJobEvaluation(cacheKey, evalResult);
     if (isJobListPage(tab.url)) {
       try {
         await chrome.tabs.sendMessage(tab.id, {
           type: 'SET_JOB_SCORES',
-          scores: { [job.id]: (result as EvaluationResult).score },
+          scores: { [job.id]: evalResult.score },
         });
       } catch {
         /* ignore */
@@ -676,35 +843,46 @@ async function runEvaluation(): Promise<void> {
   }
 }
 
-useCacheBtn.addEventListener('click', async () => {
+async function runRecalculate() {
   if (!pendingJobForRerun) return;
-  const { jobId, cachedScore } = pendingJobForRerun;
-  lastShownJobId = jobId;
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id) lastShownTabId = tab.id;
-  resultContent.innerHTML = `
-    <div class="result-verdict maybe">ℹ️ Already evaluated</div>
-    <div class="result-score">Score: ${cachedScore}/100</div>
-    <div class="result-explanation">Cached result for job ID: ${escapeHtml(jobId)}</div>
-  `;
-  resultWrap.classList.remove('hidden');
-  cacheWrap.classList.add('hidden');
-  pendingJobForRerun = null;
-});
-
-rerunBtn.addEventListener('click', async () => {
-  if (!pendingJobForRerun) return;
-  cacheWrap.classList.add('hidden');
-  loadingWrap.classList.remove('hidden');
+  const cacheKey = pendingJobForRerun.jobId;
+  resultActions.classList.add('hidden');
   resultWrap.classList.add('hidden');
   errorWrap.classList.add('hidden');
   try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !isLinkedInJobPage(tab.url)) {
+      errorText.textContent = 'Open the job page first.';
+      errorWrap.classList.remove('hidden');
+      return;
+    }
+    let job: JobData;
+    if (pendingJobForRerun.job?.id) {
+      job = pendingJobForRerun.job;
+    } else {
+      try {
+        const resp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_JOB_DATA' });
+        if (!resp?.ok || !resp.job) {
+          errorText.textContent = 'Could not read job from page.';
+          errorWrap.classList.remove('hidden');
+          return;
+        }
+        job = resp.job;
+      } catch {
+        errorText.textContent = 'Could not read job from page.';
+        errorWrap.classList.remove('hidden');
+        return;
+      }
+    }
+    currentCacheKey = cacheKey;
     const result = await chrome.runtime.sendMessage({
       type: 'EVALUATE_JOB',
-      job: pendingJobForRerun.job,
-      resumeIds: pendingJobForRerun.resumeIds,
+      job,
+      resumeIds: pendingJobForRerun.resumeIds ?? (getSelectedResumeIds().length > 0 ? getSelectedResumeIds() : undefined),
+      cacheKey,
+      senderTabId: tab.id,
+      tabUrl: tab.url,
     });
-    loadingWrap.classList.add('hidden');
     if (result?.error) {
       errorText.textContent = result.error;
       errorWrap.classList.remove('hidden');
@@ -714,15 +892,66 @@ rerunBtn.addEventListener('click', async () => {
       }
       return;
     }
-    showResult(result as EvaluationResult);
-    await saveJobEvaluation(pendingJobForRerun.jobId, (result as EvaluationResult).score);
-    resultWrap.classList.remove('hidden');
+    if ((result as { pending?: boolean }).pending) {
+      addToProcessingList(cacheKey, job.id, job.title || job.id, true);
+      sendEvaluatingJobsToTab(tab.id);
+      showBackgroundEvalState();
+      await updateEvaluateHint();
+      evalHint.classList.remove('hidden');
+    }
   } catch (e) {
-    loadingWrap.classList.add('hidden');
     errorText.textContent = (e as Error).message;
     errorWrap.classList.remove('hidden');
-  } finally {
-    pendingJobForRerun = null;
+  }
+}
+
+recalculateBtn.addEventListener('click', runRecalculate);
+
+rerunBtn.addEventListener('click', () => {
+  if (!pendingJobForRerun) return;
+  runRecalculate();
+});
+
+const markBadComment = document.getElementById('markBadComment') as HTMLInputElement;
+const markBadBtn = document.getElementById('markBadBtn')!;
+markBadBtn.addEventListener('click', async () => {
+  if (currentCacheKey == null || lastShownJobId == null) {
+    errorText.textContent = 'Open a job first, then mark as bad.';
+    errorWrap.classList.remove('hidden');
+    return;
+  }
+  const comment = (markBadComment?.value ?? '').trim() || 'Marked as bad by user.';
+  const badResult: EvaluationResult = {
+    score: 0,
+    verdict: 'not_worth',
+    hardRejectionReason: null,
+    matchBullets: [],
+    riskBullets: [],
+    bestResumeLabel: null,
+    explanation: comment,
+  };
+  await saveJobEvaluation(currentCacheKey, badResult);
+  hideBackgroundEvalState();
+  errorWrap.classList.add('hidden');
+  showResult(badResult);
+  resultActions.classList.remove('hidden');
+  resultWrap.classList.remove('hidden');
+  pendingJobForRerun = {
+    jobId: currentCacheKey,
+    job: null as unknown as JobData,
+    resumeIds: undefined,
+    cachedScore: 0,
+  };
+  if (markBadComment) markBadComment.value = '';
+  if (lastShownTabId != null) {
+    try {
+      await chrome.tabs.sendMessage(lastShownTabId, {
+        type: 'SET_JOB_SCORES',
+        scores: { [lastShownJobId]: 0 },
+      });
+    } catch {
+      /* ignore */
+    }
   }
 });
 
@@ -779,7 +1008,22 @@ if (versionDisplay) {
   const v = chrome.runtime.getManifest().version;
   versionDisplay.textContent = v ? `v${v}` : '';
 }
+document.getElementById('processingJobsWrap')?.addEventListener('click', async (e) => {
+  const item = (e.target as HTMLElement).closest('.processing-job-item');
+  if (!item) return;
+  const jobId = item.getAttribute('data-job-id');
+  if (!jobId) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !isLinkedInJobPage(tab.url)) return;
+    await chrome.tabs.sendMessage(tab.id, { type: 'SELECT_JOB', jobId });
+  } catch {
+    /* tab or content script unavailable */
+  }
+});
+
 debugLog('Extension loaded');
+renderProcessingJobs();
 (async () => {
   await loadSettings();
   await renderResumes();
@@ -805,7 +1049,46 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const url = changeInfo.url ?? tab.url;
   scheduleJobCheckIfJobChanged(tabId, url, false);
 });
-chrome.runtime.onMessage.addListener((msg: { type: string; jobId?: string; url?: string }, sender) => {
+chrome.runtime.onMessage.addListener((msg: { type: string; jobId?: string; url?: string; cacheKey?: string; result?: EvaluationResult; error?: string; raw?: string }, sender) => {
+  if (msg.type === 'EVALUATION_COMPLETE' && msg.cacheKey != null) {
+    const isCurrentJob = msg.cacheKey === currentCacheKey;
+    if (msg.error) {
+      updateProcessingJobDone(msg.cacheKey, undefined);
+      if (isCurrentJob) {
+        hideBackgroundEvalState();
+        resultWrap.classList.add('hidden');
+        resultRaw.classList.add('hidden');
+        debugLog('Background eval error: ' + msg.error, 'error');
+        errorText.textContent = msg.error;
+        if (msg.raw) {
+          resultRaw.classList.remove('hidden');
+          resultRawText.textContent = msg.raw;
+        }
+        errorWrap.classList.remove('hidden');
+      }
+      return;
+    }
+    if (msg.result) {
+      updateProcessingJobDone(msg.cacheKey, msg.result.score);
+      if (isCurrentJob) {
+        hideBackgroundEvalState();
+        resultWrap.classList.add('hidden');
+        errorWrap.classList.add('hidden');
+        resultRaw.classList.add('hidden');
+        debugLog(`EVALUATION_COMPLETE: ${msg.result.score}/100 — ${msg.result.verdict}`);
+        showResult(msg.result);
+        resultActions.classList.remove('hidden');
+        resultWrap.classList.remove('hidden');
+        pendingJobForRerun = {
+          jobId: msg.cacheKey,
+          job: null as unknown as JobData,
+          resumeIds: undefined,
+          cachedScore: msg.result.score,
+        };
+      }
+    }
+    return;
+  }
   if (msg.type !== 'JOB_PAGE_CHANGED' || !sender.tab?.id) return;
   if (msg.jobId) {
     debugLog('JOB_PAGE_CHANGED: job ' + msg.jobId + ' (from active card)');

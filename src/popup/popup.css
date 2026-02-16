@@ -153,6 +153,9 @@ body {
 .api-key-wrap.hidden,
 .error.hidden,
 .result-wrap.hidden,
+.loading-wrap .loading-spinner.hidden,
+.loading-wrap .loading-dots.hidden,
+.loading-wrap .loading-title.hidden,
 .loading-wrap.hidden,
 .error-wrap.hidden,
 .result-raw.hidden,
@@ -471,6 +474,16 @@ body {
   font-size: 13px;
 }
 
+.result-actions {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+}
+
+.result-actions.hidden {
+  display: none;
+}
+
 .result-verdict {
   font-weight: 600;
   margin-bottom: 8px;
@@ -519,6 +532,89 @@ body {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.mark-bad-wrap {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+.mark-bad-wrap .label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mark-bad-wrap .input {
+  width: 100%;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.mark-bad-wrap .btn {
+  width: 100%;
+}
+
+.processing-jobs-wrap {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+.processing-jobs-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #555;
+}
+
+.processing-jobs-list {
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.processing-job-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: #f8f8f8;
+  border-left: 3px solid #ccc;
+  cursor: pointer;
+}
+
+.processing-job-item:hover {
+  background: #eee;
+}
+
+.processing-job-item.done {
+  background: #e8f5e9;
+  border-left-color: #2e7d32;
+}
+
+.processing-job-item .job-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processing-job-item .job-score {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+.processing-job-item .job-pending {
+  flex-shrink: 0;
+  color: #888;
+  font-size: 11px;
 }
 
 /* Support / Buy Me a Coffee footer */

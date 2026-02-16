@@ -191,15 +191,14 @@ export function extractJobData(): JobData | null {
  * Retry extractJobData with delays — on collections/search pages the job detail
  * pane loads asynchronously, so the DOM may not be ready on the first attempt.
  */
-async function extractJobDataWithRetry(maxRetries = 5, delayMs = 600): Promise<JobData | null> {
+async function extractJobDataWithRetry(maxRetries = 8, delayMs = 0): Promise<JobData | null> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const job = extractJobData();
     if (job && (job.title !== 'Unknown title' || job.description)) return job;
-    if (attempt < maxRetries) {
+    if (attempt < maxRetries && delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
-  // Final attempt — return whatever we got (may be null)
   return extractJobData();
 }
 
@@ -350,11 +349,13 @@ function getLeftPaneCardElement(jobId: string): HTMLElement | null {
 function selectJobById(jobId: string): boolean {
   const el = getLeftPaneCardElement(jobId);
   if (!el) return false;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   el.click();
   return true;
 }
 
 const JOB_EVAL_CARD_CLASS = 'job-eval-card-anchor';
+const JOB_EVAL_EVALUATING_CLASS = 'job-eval-evaluating';
 const jobScoreWidgetStyles = `
   .${JOB_EVAL_CARD_CLASS} { position: relative; }
   .${JOB_EVAL_WIDGET_CONTAINER} {
@@ -368,6 +369,14 @@ const jobScoreWidgetStyles = `
   .${JOB_EVAL_WIDGET_CLASS}.job-eval-high { background: #0d6832; color: #fff; }
   .${JOB_EVAL_WIDGET_CLASS}.job-eval-mid { background: #b38600; color: #fff; }
   .${JOB_EVAL_WIDGET_CLASS}.job-eval-low { background: #b32d0e; color: #fff; }
+  .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_EVALUATING_CLASS} { background: #5c6bc0; color: #fff; }
+  .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_EVALUATING_CLASS} {
+    animation: job-eval-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes job-eval-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
 `;
 
 let injectedStyles = false;
@@ -381,6 +390,7 @@ function ensureScoreWidgetStyles() {
 }
 
 const jobScores = new Map<string, number>();
+const evaluatingJobIds = new Set<string>();
 
 function scoreClass(score: number): string {
   if (score >= 75) return 'job-eval-high';
@@ -388,10 +398,10 @@ function scoreClass(score: number): string {
   return 'job-eval-low';
 }
 
-function setJobScores(scores: Record<string, number>) {
+function applyBadges() {
   ensureScoreWidgetStyles();
-  Object.entries(scores).forEach(([id, score]) => jobScores.set(id, score));
-  jobScores.forEach((score, jobId) => {
+  const allIds = new Set([...jobScores.keys(), ...evaluatingJobIds]);
+  allIds.forEach((jobId) => {
     const card = getLeftPaneCardElement(jobId);
     if (!card) return;
     card.classList.add(JOB_EVAL_CARD_CLASS);
@@ -407,10 +417,30 @@ function setJobScores(scores: Record<string, number>) {
       badge.className = JOB_EVAL_WIDGET_CLASS;
       container.appendChild(badge);
     }
-    const rounded = Math.round(score);
-    badge.textContent = `Score: ${rounded}/100`;
-    badge.className = `${JOB_EVAL_WIDGET_CLASS} ${scoreClass(score)}`;
+    const score = jobScores.get(jobId);
+    if (score != null) {
+      const rounded = Math.round(score);
+      badge.textContent = `Score: ${rounded}/100`;
+      badge.className = `${JOB_EVAL_WIDGET_CLASS} ${scoreClass(score)}`;
+    } else if (evaluatingJobIds.has(jobId)) {
+      badge.textContent = 'Evaluating…';
+      badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+    }
   });
+}
+
+function setJobScores(scores: Record<string, number>) {
+  Object.entries(scores).forEach(([id, score]) => {
+    jobScores.set(id, score);
+    evaluatingJobIds.delete(id);
+  });
+  applyBadges();
+}
+
+function setEvaluatingJobs(jobIds: string[]) {
+  evaluatingJobIds.clear();
+  jobIds.forEach((id) => evaluatingJobIds.add(id));
+  applyBadges();
 }
 
 const NOTIFY_THROTTLE_MS = 400;
@@ -465,7 +495,7 @@ function cleanupAfterInvalidation() {
 }
 
 let lastNotifiedJobId: string | null = getActiveJobIdFromDom() ?? getJobIdFromUrlString();
-const JOB_POLL_MS = 500;
+const JOB_POLL_MS = 150;
 let jobPollIntervalId: ReturnType<typeof setInterval> | null = null;
 
 function isJobListPage(): boolean {
@@ -517,7 +547,8 @@ function refreshScoresOnLoad() {
 const isTopFrame = typeof window !== 'undefined' && window === window.top;
 if (isTopFrame && isExtensionContextValid()) {
   // Show cached score tags on page load/reload (job list may render after a delay)
-  const LOAD_DELAYS_MS = [1500, 4000, 7000];
+  refreshScoresOnLoad();
+  const LOAD_DELAYS_MS = [300, 1000];
   LOAD_DELAYS_MS.forEach((delay) => {
     setTimeout(refreshScoresOnLoad, delay);
   });
@@ -544,7 +575,7 @@ if (isTopFrame && isExtensionContextValid()) {
 
   chrome.runtime.onMessage.addListener(
     (
-      msg: { type: string; jobId?: string; scores?: Record<string, number> },
+      msg: { type: string; jobId?: string; scores?: Record<string, number>; jobIds?: string[] },
       _sender: chrome.runtime.MessageSender,
       sendResponse: (r: { ok: boolean; job?: JobData; jobs?: LeftPaneJob[]; error?: string }) => void
     ) => {
@@ -609,6 +640,15 @@ if (isTopFrame && isExtensionContextValid()) {
       if (msg.type === 'SET_JOB_SCORES' && msg.scores) {
         try {
           setJobScores(msg.scores);
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        return false;
+      }
+      if (msg.type === 'SET_EVALUATING_JOBS' && Array.isArray(msg.jobIds)) {
+        try {
+          setEvaluatingJobs(msg.jobIds);
           sendResponse({ ok: true });
         } catch (e) {
           sendResponse({ ok: false, error: (e as Error).message });

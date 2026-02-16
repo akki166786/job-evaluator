@@ -33,6 +33,9 @@
       </div>
       <div id="resultWrap" class="result-wrap hidden">
         <div id="resultContent" class="result-content"></div>
+        <div id="resultActions" class="result-actions hidden">
+          <button type="button" id="recalculateBtn" class="btn btn-secondary" aria-label="Re-evaluate this job">Recalculate</button>
+        </div>
         <details id="resultRaw" class="result-raw hidden">
           <summary>Raw response</summary>
           <pre id="resultRawText"></pre>
@@ -44,9 +47,18 @@
           <span class="loading-title">Evaluating job fit</span>
           <span class="loading-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
         </div>
-        <p class="loading-hint">Waiting for model reply…</p>
+        <p class="loading-hint" id="loadingHint">Waiting for model reply…</p>
       </div>
       <div id="errorWrap" class="error-wrap hidden"><p id="errorText" class="error"></p></div>
+      <div id="markBadWrap" class="mark-bad-wrap">
+        <label class="label">Mark current job as bad</label>
+        <input type="text" id="markBadComment" class="input" placeholder="Reason (e.g. wrong location, no remote)" maxlength="500" />
+        <button type="button" id="markBadBtn" class="btn btn-secondary">Mark as bad</button>
+      </div>
+      <div id="processingJobsWrap" class="processing-jobs-wrap">
+        <div class="processing-jobs-title">Processing jobs</div>
+        <div id="processingJobsList" class="processing-jobs-list"></div>
+      </div>
     </section>
 
     <section id="panel-settings" class="panel">
