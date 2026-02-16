@@ -4,6 +4,8 @@ export interface JobData {
   title: string;
   description: string;
   location: string;
+  /** Company name when present (job detail or card). */
+  company?: string;
 }
 
 /** One resume stored locally (parsed text + label). */

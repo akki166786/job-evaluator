@@ -419,6 +419,7 @@ const loadingSpinner = loadingWrap.querySelector('.loading-spinner');
 const loadingDots = loadingWrap.querySelector('.loading-dots');
 const errorWrap = document.getElementById('errorWrap')!;
 const errorText = document.getElementById('errorText')!;
+const errorRetryBtn = document.getElementById('errorRetryBtn')!;
 const cacheWrap = document.getElementById('cacheWrap')!;
 const cacheText = document.getElementById('cacheText')!;
 const useCacheBtn = document.getElementById('useCacheBtn')!;
@@ -612,11 +613,15 @@ const JOB_CHANGE_DELAY_MS = 280;
 const JOB_CHECK_RETRY_DELAY_MS = 350;
 const JOB_CHECK_MAX_RETRIES = 5;
 
+/** When true, allow job check / retry for the same job (e.g. after "Rate limited."). */
+let lastErrorWasRateLimit = false;
+
 let scheduledJobId: string | null = null;
 let scheduledTabId: number | null = null;
 
 /**
  * When job ID changes, schedule a check after delay. Detail pane loads async so we wait and retry.
+ * Same job is not skipped when lastErrorWasRateLimit so retry is allowed.
  */
 function scheduleJobCheckIfJobChanged(tabId: number, jobIdOrUrl: string | undefined, fromActiveElement: boolean) {
   const jobId =
@@ -624,7 +629,7 @@ function scheduleJobCheckIfJobChanged(tabId: number, jobIdOrUrl: string | undefi
       ? jobIdOrUrl
       : getJobIdFromUrl(jobIdOrUrl);
   if (jobId == null) return;
-  if (jobId === lastShownJobId && lastShownTabId === tabId) {
+  if (jobId === lastShownJobId && lastShownTabId === tabId && !lastErrorWasRateLimit) {
     debugLog('Job check skipped: same job');
     return;
   }
@@ -672,6 +677,12 @@ function scheduleJobCheckIfJobChanged(tabId: number, jobIdOrUrl: string | undefi
           runEvaluation();
           return;
         }
+        if (lastErrorWasRateLimit && domJobId === lastShownJobId && lastShownTabId === tabId) {
+          debugLog(`Job check: same job but rate-limit retry — running evaluation`);
+          lastErrorWasRateLimit = false;
+          runEvaluation();
+          return;
+        }
         if (expectedJobId != null && domJobId !== expectedJobId) {
           debugLog(`Job check: detail pane still old (${domJobId}), retry in ${JOB_CHECK_RETRY_DELAY_MS}ms`);
         } else if (attempt < JOB_CHECK_MAX_RETRIES - 1) {
@@ -712,6 +723,7 @@ async function runEvaluation(): Promise<void> {
     return;
   }
   isEvaluationRunning = true;
+  lastErrorWasRateLimit = false;
   debugLog('Run evaluation');
   resultWrap.classList.add('hidden');
   resultActions.classList.add('hidden');
@@ -816,6 +828,7 @@ async function runEvaluation(): Promise<void> {
       await updateEvaluateHint();
       evalHint.classList.remove('hidden');
       debugLog('Error: ' + result.error, 'error');
+      lastErrorWasRateLimit = result.error === 'Rate limited.';
       errorText.textContent = result.error;
       errorWrap.classList.remove('hidden');
       if (result.raw) {
@@ -855,6 +868,7 @@ async function runEvaluation(): Promise<void> {
     const err = e as Error;
     isEvaluationRunning = false;
     debugLog('Exception: ' + err.message, 'error');
+    lastErrorWasRateLimit = err.message === 'Rate limited.';
     loadingWrap.classList.add('hidden');
     await updateEvaluateHint();
     evalHint.classList.remove('hidden');
@@ -929,6 +943,12 @@ async function runRecalculate() {
 }
 
 recalculateBtn.addEventListener('click', runRecalculate);
+
+errorRetryBtn.addEventListener('click', () => {
+  errorWrap.classList.add('hidden');
+  resultRaw.classList.add('hidden');
+  runEvaluation();
+});
 
 rerunBtn.addEventListener('click', () => {
   if (!pendingJobForRerun) return;
@@ -1093,6 +1113,7 @@ chrome.runtime.onMessage.addListener((msg: { type: string; jobId?: string; url?:
         resultWrap.classList.add('hidden');
         resultRaw.classList.add('hidden');
         debugLog('Background eval error: ' + msg.error, 'error');
+        lastErrorWasRateLimit = msg.error === 'Rate limited.';
         errorText.textContent = msg.error;
         if (msg.raw) {
           resultRaw.classList.remove('hidden');
@@ -1105,6 +1126,7 @@ chrome.runtime.onMessage.addListener((msg: { type: string; jobId?: string; url?:
     if (msg.result) {
       updateProcessingJobDone(msg.cacheKey, msg.result.score);
       if (isCurrentJob) {
+        lastErrorWasRateLimit = false;
         hideBackgroundEvalState();
         resultWrap.classList.add('hidden');
         errorWrap.classList.add('hidden');
