@@ -1,7 +1,7 @@
 import type { JobData, ResumeRecord, EvaluationResult, EvaluationResultRaw, ApiProvider } from './types';
 import { buildUserPrompt, SYSTEM_PROMPT } from './prompts';
 
-const OLLAMA_ENDPOINT = 'http://localhost:11434/v1/chat/completions';
+const OLLAMA_ENDPOINT = 'http://127.0.0.1:11434/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 60_000;
 const OLLAMA_TIMEOUT_MS = 180_000; // local model can be slow on CPU
 
@@ -361,10 +361,9 @@ export async function evaluateJob(
       if (res.status === 0 || res.type === 'opaque') {
         throw new Error('Could not reach Ollama. Is it running? (e.g. ollama serve or Docker.)');
       }
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
         throw new Error(
-          'Ollama returned Forbidden (403). Start Ollama with OLLAMA_ORIGINS=* to allow this extension. ' +
-            'Docker: docker run -e OLLAMA_ORIGINS=* -p 11434:11434 ollama/ollama'
+          'Ollama rejected the request (CORS). Quit the Ollama app completely, then in a terminal run: OLLAMA_ORIGINS=* ollama serve'
         );
       }
     }

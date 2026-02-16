@@ -8,6 +8,20 @@ const outDir = join(__dirname, 'dist');
 
 const watch = process.argv.includes('--watch');
 
+/** Bump patch version (e.g. 1.0.0 → 1.0.1) in package.json. Returns new version. */
+function bumpVersion() {
+  const pkgPath = join(__dirname, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+  const parts = (pkg.version || '1.0.0').split('.').map(Number);
+  if (parts.length < 3) parts.push(0, 0);
+  parts[2] = (parts[2] || 0) + 1;
+  const newVersion = parts.join('.');
+  pkg.version = newVersion;
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+  console.log(`Version bumped → ${newVersion}`);
+  return newVersion;
+}
+
 /** Sync version from package.json into manifest.json before copying to dist. */
 function syncVersion() {
   const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
@@ -20,10 +34,10 @@ function syncVersion() {
   }
 }
 
-async function build() {
+async function build(bump = false) {
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
-  // Sync version before build
+  if (bump) bumpVersion();
   syncVersion();
 
   await esbuild.build({
@@ -88,5 +102,5 @@ if (watch) {
   await ctx.watch();
   console.log('Watching...');
 } else {
-  await build();
+  await build(true); // auto-increment version on each full build
 }

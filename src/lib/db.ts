@@ -1,4 +1,4 @@
-import type { ResumeRecord, SettingsRecord, ApiProvider } from './types';
+import type { ResumeRecord, SettingsRecord, ApiProvider, EvaluationResult } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 const DB_NAME = 'linkedin-job-eval-db';
@@ -209,6 +209,8 @@ export interface JobEvaluationRecord {
   jobId: string;
   score: number;
   evaluatedAt: number;
+  /** Full result when available (explanation, bullets, verdict); older cache may have only score. */
+  result?: EvaluationResult;
 }
 
 export async function getJobEvaluation(jobId: string): Promise<JobEvaluationRecord | null> {
@@ -262,11 +264,17 @@ async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
   });
 }
 
-export async function saveJobEvaluation(jobId: string, score: number): Promise<void> {
+export async function saveJobEvaluation(jobId: string, result: EvaluationResult): Promise<void> {
   const db = await openDB();
+  const score = result.score;
   return new Promise((resolve, reject) => {
     const t = db.transaction(JOB_EVALS_STORE, 'readwrite');
-    const req = t.objectStore(JOB_EVALS_STORE).put({ jobId, score, evaluatedAt: Date.now() });
+    const req = t.objectStore(JOB_EVALS_STORE).put({
+      jobId,
+      score,
+      evaluatedAt: Date.now(),
+      result,
+    });
     req.onsuccess = async () => {
       try {
         await trimJobEvaluations(db);

@@ -1,4 +1,4 @@
-import { getSettings, getAllResumes } from '../lib/db';
+import { getSettings, getAllResumes, getJobEvaluation, saveJobEvaluation } from '../lib/db';
 import { evaluateJob, PROVIDER_MODELS } from '../lib/llm';
 import type { JobData, EvaluationResult, ApiProvider } from '../lib/types';
 
@@ -9,54 +9,139 @@ chrome.action.onClicked.addListener((tab) => {
   }
 });
 
+const PENDING_JOB_KEY = 'pendingJobChange';
+
+const MAX_CONCURRENT_EVALS = 10;
+interface EvalTask {
+  job: JobData;
+  resumeIds: string[] | undefined;
+  cacheKey: string;
+  senderTabId: number | undefined;
+  tabUrl: string | undefined;
+}
+let inFlightCount = 0;
+const pendingQueue: EvalTask[] = [];
+
+function isJobListPage(url: string | undefined): boolean {
+  if (!url) return false;
+  return /^https:\/\/www\.linkedin\.com\/jobs\/search\//.test(url) || /^https:\/\/www\.linkedin\.com\/jobs\/collections\//.test(url);
+}
+
+function runEvalTask(task: EvalTask): void {
+  inFlightCount++;
+  (async () => {
+    let result: EvaluationResult | null = null;
+    let error: string | undefined;
+    let raw: string | undefined;
+    try {
+      const settings = await getSettings();
+      let resumes = await getAllResumes();
+      if (settings.apiProvider === 'ollama') {
+        resumes = [];
+      } else if (task.resumeIds && task.resumeIds.length > 0) {
+        const idSet = new Set(task.resumeIds);
+        resumes = resumes.filter((r) => idSet.has(r.id));
+      } else {
+        resumes = [];
+      }
+      const provider = settings.apiProvider as ApiProvider;
+      const effectiveModel =
+        provider === 'ollama'
+          ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() ||
+            PROVIDER_MODELS.ollama
+          : (settings.providerModels?.[provider]?.trim() || PROVIDER_MODELS[provider]);
+      result = await evaluateJob(
+        task.job,
+        resumes,
+        settings.profileIntent,
+        settings.skillsTechStack,
+        settings.negativeFilters,
+        provider,
+        settings.apiKeys?.[settings.apiProvider] ?? '',
+        effectiveModel
+      );
+      await saveJobEvaluation(task.cacheKey, result);
+      if (task.senderTabId != null && isJobListPage(task.tabUrl)) {
+        try {
+          await chrome.tabs.sendMessage(task.senderTabId, {
+            type: 'SET_JOB_SCORES',
+            scores: { [task.job.id]: result!.score },
+          });
+        } catch {
+          /* tab closed or context invalid */
+        }
+      }
+    } catch (e) {
+      const err = e as Error;
+      error = err.message || 'Evaluation failed.';
+      raw = err.message;
+    } finally {
+      chrome.runtime.sendMessage({
+        type: 'EVALUATION_COMPLETE',
+        cacheKey: task.cacheKey,
+        jobId: task.job.id,
+        result: result ?? undefined,
+        error,
+        raw,
+      }).catch(() => {});
+      inFlightCount--;
+      if (pendingQueue.length > 0 && inFlightCount < MAX_CONCURRENT_EVALS) {
+        const next = pendingQueue.shift()!;
+        runEvalTask(next);
+      }
+    }
+  })();
+}
+
 chrome.runtime.onMessage.addListener(
   (
-    msg: { type: string; job?: JobData; resumeIds?: string[] },
-    _sender: chrome.runtime.MessageSender,
-    sendResponse: (r: { error?: string; raw?: string } | EvaluationResult) => void
+    msg: {
+      type: string;
+      job?: JobData;
+      resumeIds?: string[];
+      cacheKey?: string;
+      senderTabId?: number;
+      tabUrl?: string;
+      url?: string;
+      jobIds?: string[];
+    },
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (r: { error?: string; raw?: string; pending?: boolean; scores?: Record<string, number> } | EvaluationResult) => void
   ) => {
-    if (msg.type !== 'EVALUATE_JOB' || !msg.job) {
-      sendResponse({ error: 'Missing job data.' });
+    if (msg.type === 'JOB_PAGE_CHANGED' && sender.tab?.id != null && msg.url) {
+      chrome.storage.session.set({ [PENDING_JOB_KEY]: { tabId: sender.tab.id, url: msg.url } }).catch(() => {});
+      sendResponse({});
+      return false;
+    }
+    if (msg.type === 'GET_CACHED_SCORES_FOR_JOBS' && Array.isArray(msg.jobIds)) {
+      (async () => {
+        const scores: Record<string, number> = {};
+        for (const id of msg.jobIds!) {
+          const rec = await getJobEvaluation(id).catch(() => null);
+          if (rec != null) scores[id] = rec.score;
+        }
+        sendResponse({ scores });
+      })();
       return true;
     }
-    (async () => {
-      try {
-        const settings = await getSettings();
-        let resumes = await getAllResumes();
-        // Send resumes only when at least one is selected; otherwise only profile intent and negative filters
-        if (settings.apiProvider === 'ollama') {
-          resumes = [];
-        } else if (msg.resumeIds && msg.resumeIds.length > 0) {
-          const idSet = new Set(msg.resumeIds);
-          resumes = resumes.filter((r) => idSet.has(r.id));
-        } else {
-          resumes = [];
-        }
-        const provider = settings.apiProvider as ApiProvider;
-        const effectiveModel =
-          provider === 'ollama'
-            ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() ||
-              PROVIDER_MODELS.ollama
-            : (settings.providerModels?.[provider]?.trim() || PROVIDER_MODELS[provider]);
-        const result = await evaluateJob(
-          msg.job!,
-          resumes,
-          settings.profileIntent,
-          settings.skillsTechStack,
-          settings.negativeFilters,
-          provider,
-          settings.apiKeys?.[settings.apiProvider] ?? '',
-          effectiveModel
-        );
-        sendResponse(result);
-      } catch (e) {
-        const err = e as Error;
-        sendResponse({
-          error: err.message || 'Evaluation failed.',
-          raw: err.message,
-        });
-      }
-    })();
-    return true; // keep channel open for async sendResponse
+    if (msg.type !== 'EVALUATE_JOB' || !msg.job) {
+      sendResponse({ error: 'Missing job data.' });
+      return false;
+    }
+    const cacheKey = msg.cacheKey ?? msg.job.id;
+    const task: EvalTask = {
+      job: msg.job,
+      resumeIds: msg.resumeIds,
+      cacheKey,
+      senderTabId: msg.senderTabId,
+      tabUrl: msg.tabUrl,
+    };
+    if (inFlightCount < MAX_CONCURRENT_EVALS) {
+      runEvalTask(task);
+    } else {
+      pendingQueue.push(task);
+    }
+    sendResponse({ pending: true });
+    return false;
   }
 );

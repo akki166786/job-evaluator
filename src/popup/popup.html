@@ -9,10 +9,11 @@
 <body>
   <div class="popup">
     <header class="header">
-      <h1 class="title">AI Job Evaluator</h1>
+      <h1 class="title">AI Job Evaluator <span id="versionDisplay" class="version" aria-label="Extension version"></span></h1>
       <div class="header-actions">
         <button type="button" class="tab-link" data-tab="settings" aria-label="Open settings">Settings</button>
         <button type="button" class="tab-link" data-tab="resumes" aria-label="Manage resumes">Resumes</button>
+        <button type="button" class="tab-link" data-tab="debug" aria-label="Debug log">Debug</button>
         <a href="https://github.com/akki166786/job-evaluator/blob/main/README.md" target="_blank" rel="noopener noreferrer" class="help-link" id="helpLink" aria-label="Help / More info">ℹ️ Help</a>
       </div>
     </header>
@@ -21,8 +22,7 @@
       <p class="hint resume-hint" id="resumeHint">Select resumes to include. If none selected, only your profile intent, skills/tech stack, and negative filters are sent.</p>
       <div id="resumeCheckboxes" class="resume-checkboxes"></div>
       <div class="eval-section">
-        <button type="button" id="evaluateBtn" class="btn btn-primary" disabled aria-label="Evaluate current LinkedIn job">Evaluate this job</button>
-        <p id="evalHint" class="hint">Open a LinkedIn job page, then click to evaluate.</p>
+        <p id="evalHint" class="hint">Open a LinkedIn job page to evaluate.</p>
       </div>
       <div id="cacheWrap" class="cache-wrap hidden">
         <p id="cacheText" class="hint"></p>
@@ -33,13 +33,32 @@
       </div>
       <div id="resultWrap" class="result-wrap hidden">
         <div id="resultContent" class="result-content"></div>
+        <div id="resultActions" class="result-actions hidden">
+          <button type="button" id="recalculateBtn" class="btn btn-secondary" aria-label="Re-evaluate this job">Recalculate</button>
+        </div>
         <details id="resultRaw" class="result-raw hidden">
           <summary>Raw response</summary>
           <pre id="resultRawText"></pre>
         </details>
       </div>
-      <div id="loadingWrap" class="loading-wrap hidden">Evaluating…</div>
+      <div id="loadingWrap" class="loading-wrap hidden">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-content">
+          <span class="loading-title">Evaluating job fit</span>
+          <span class="loading-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+        </div>
+        <p class="loading-hint" id="loadingHint">Waiting for model reply…</p>
+      </div>
       <div id="errorWrap" class="error-wrap hidden"><p id="errorText" class="error"></p></div>
+      <div id="markBadWrap" class="mark-bad-wrap">
+        <label class="label">Mark current job as bad</label>
+        <input type="text" id="markBadComment" class="input" placeholder="Reason (e.g. wrong location, no remote)" maxlength="500" />
+        <button type="button" id="markBadBtn" class="btn btn-secondary">Mark as bad</button>
+      </div>
+      <div id="processingJobsWrap" class="processing-jobs-wrap">
+        <div class="processing-jobs-title">Processing jobs</div>
+        <div id="processingJobsList" class="processing-jobs-list"></div>
+      </div>
     </section>
 
     <section id="panel-settings" class="panel">
@@ -72,13 +91,36 @@
 
     <section id="panel-resumes" class="panel">
       <p class="hint">Add up to 5 resumes (PDF or DOCX). Label each (e.g. Frontend, Full-stack).</p>
-      <div id="resumeList" class="resume-list"></div>
       <div id="addResumeWrap" class="add-resume">
         <input type="text" id="resumeLabel" class="input inline-label" placeholder="Label (e.g. Frontend)" maxlength="50" />
         <input type="file" id="resumeFile" class="file-input" accept=".pdf,.docx" />
         <button type="button" id="addResume" class="btn btn-secondary" aria-label="Add resume">Add resume</button>
       </div>
+      <div id="resumeLoading" class="resume-upload-state resume-loading hidden" role="status">
+        <span class="resume-loading-spinner" aria-hidden="true"></span>
+        <span id="resumeLoadingText">Parsing…</span>
+      </div>
+      <div id="resumeResultsWrap" class="resume-upload-state resume-results hidden">
+        <h3 class="resume-results-title">Processing results</h3>
+        <div class="resume-results-meta">
+          <span id="resumeResultsMeta"></span>
+        </div>
+        <p id="resumeResultsPreview" class="resume-results-preview"></p>
+        <p class="resume-results-hint">This text will be sent to the model when you evaluate a job.</p>
+        <button type="button" id="resumeSaveBtn" class="btn btn-primary resume-save-btn">Save CV</button>
+      </div>
+      <p class="label resume-list-label">Your resumes</p>
+      <div id="resumeList" class="resume-list"></div>
       <p id="resumeError" class="error hidden" role="alert"></p>
+      <button type="button" class="tab-link back" data-tab="main" aria-label="Back to main panel">Back</button>
+    </section>
+
+    <section id="panel-debug" class="panel">
+      <div class="debug-toolbar">
+        <span class="debug-title">Debug log</span>
+        <button type="button" id="debugClear" class="btn btn-secondary btn-small">Clear</button>
+      </div>
+      <div id="debugLog" class="debug-log" role="log"></div>
       <button type="button" class="tab-link back" data-tab="main" aria-label="Back to main panel">Back</button>
     </section>
 
