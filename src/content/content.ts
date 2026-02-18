@@ -132,9 +132,131 @@ function parseJsonLdJob(): Partial<JobData> | null {
   return null;
 }
 
+/**
+ * Heuristic fallback: find the largest visible text block likely containing a job description.
+ * This keeps extraction resilient when LinkedIn changes class names.
+ */
+function findLargestTextBlock(minLength = 100): Element | null {
+  const candidates = document.querySelectorAll(
+    'section, article, div[class*="description"], div[class*="details"], div[class*="content"], div[class*="jobs-box"], main'
+  );
+  let best: Element | null = null;
+  let bestLen = minLength;
+  candidates.forEach((el) => {
+    const t = getText(el);
+    if (el === document.body || el.tagName === 'HTML') return;
+    if (t.length > bestLen && t.length < 15_000) {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'nav' || tag === 'header' || tag === 'footer') return;
+      best = el;
+      bestLen = t.length;
+    }
+  });
+  return best;
+}
+
+/**
+ * Fallback: find the "About the job" h2 and extract description from its sibling/parent.
+ * LinkedIn's 2025+ /jobs/view/ layout uses h2 headings instead of class-based containers.
+ */
+function extractDescriptionFromAboutSection(): string {
+  const headings = document.querySelectorAll('h2');
+  for (const h2 of headings) {
+    const text = (h2.textContent ?? '').trim().toLowerCase();
+    if (text === 'about the job') {
+      // Description is usually in the next sibling element or in the parent container after the h2
+      let sibling = h2.nextElementSibling;
+      while (sibling) {
+        const t = getText(sibling);
+        if (t.length > 50) return t;
+        sibling = sibling.nextElementSibling;
+      }
+      // Try parent container (h2 might be inside a header within a section)
+      const parent = h2.parentElement;
+      if (parent) {
+        const t = getText(parent);
+        if (t.length > 80) return t.replace(/^about the job\s*/i, '').trim();
+      }
+      // Try grandparent
+      const grandparent = parent?.parentElement;
+      if (grandparent) {
+        const t = getText(grandparent);
+        if (t.length > 80) return t.replace(/^about the job\s*/i, '').trim();
+      }
+    }
+  }
+  return '';
+}
+
+/**
+ * Fallback: find the job title from the page when no h1 or known selectors match.
+ * On the 2025+ /jobs/view/ layout, the title may be in an a tag inside the top card,
+ * or in an h2 that's the first heading near the top of main content.
+ */
+function extractTitleFallback(): string {
+  // Try: link to the same /jobs/view/ page (LinkedIn often wraps the title in a self-link)
+  const jobId = getJobIdFromUrl();
+  if (jobId) {
+    const selfLinks = document.querySelectorAll(`a[href*="/jobs/view/${jobId}"]`);
+    for (const link of selfLinks) {
+      const t = (link.textContent ?? '').trim();
+      if (t.length > 3 && t.length < 200) return t;
+    }
+  }
+  // Try: first non-nav h2 that looks like a title (short, near top of main)
+  const skipH2 = ['about the job', 'set alert', 'similar jobs', 'people also viewed', 'use ai', 'notifications', 'top job picks', 'recent job searches', 'put your best foot forward', 'application status', 'people you can reach out'];
+  const main = document.querySelector('main');
+  if (main) {
+    const h2s = main.querySelectorAll('h2');
+    for (const h2 of h2s) {
+      const t = (h2.textContent ?? '').trim();
+      if (t.length > 3 && t.length < 120 && !skipH2.some(s => t.toLowerCase().includes(s))) {
+        return t;
+      }
+    }
+  }
+  // Try: any element with aria-label or role="heading" that contains the job title
+  const headingEls = document.querySelectorAll('[role="heading"]');
+  for (const el of headingEls) {
+    const t = (el.textContent ?? '').trim();
+    if (t.length > 3 && t.length < 200) return t;
+  }
+  return '';
+}
+
+/**
+ * Fallback: find company name when class-based selectors fail.
+ */
+function extractCompanyFallback(): string {
+  // Try: any link to /company/ in the main content area
+  const main = document.querySelector('main') ?? document.body;
+  const companyLinks = main.querySelectorAll('a[href*="/company/"]');
+  for (const link of companyLinks) {
+    const t = (link.textContent ?? '').trim();
+    if (t.length > 1 && t.length < 100) return t;
+  }
+  return '';
+}
+
+/**
+ * Fallback: find location info from the page when class-based selectors fail.
+ */
+function extractLocationFallback(): string {
+  // LinkedIn often has a span with location near the company name in the top card
+  const main = document.querySelector('main') ?? document.body;
+  const spans = main.querySelectorAll('span');
+  for (const span of spans) {
+    const t = (span.textContent ?? '').trim();
+    // Location patterns: "City, State", "City, Country", "Remote"
+    if (t.length > 2 && t.length < 100 && /(?:remote|hybrid|on-site|,\s*\w)/i.test(t) && !t.includes('ago') && !t.includes('applicant')) {
+      return t;
+    }
+  }
+  return '';
+}
+
 export function extractJobData(): JobData | null {
   const jsonLd = parseJsonLdJob();
-  // Prefer URL job id so cache key is stable (URL is source of truth for which job is open).
   const jobId = getJobIdFromUrl() ?? getJobIdFromDom() ?? jsonLd?.id ?? '';
 
   // Title selectors — /jobs/view, /jobs/search, /jobs/collections detail pane
@@ -151,7 +273,11 @@ export function extractJobData(): JobData | null {
     'h1',                                                  // last resort
   ];
   const titleEl = queryOne(titleSelectors);
-  const title = getText(titleEl ?? document.querySelector('h1')) || jsonLd?.title || getMetaContent('og:title');
+  const title = getText(titleEl ?? document.querySelector('h1'))
+    || jsonLd?.title
+    || getMetaContent('og:title')
+    || document.title.replace(/\s*\|.*$/, '').replace(/\s*[-].*LinkedIn.*$/i, '').trim()
+    || extractTitleFallback();
 
   // Description selectors — /jobs/view main body, search/collections detail pane
   const descSelectors = [
@@ -164,21 +290,45 @@ export function extractJobData(): JobData | null {
     '.jobs-description',                                   // generic description container
     '.show-more-less-html',                                // expandable description wrapper
     '.jobs-box .jobs-box__html-content',                   // legacy fallback
+    '.jobs-search__job-details .jobs-description-content', // search detail variant
+    '.jobs-details .jobs-description-content',             // collections detail variant
+    '.scaffold-layout__detail .jobs-box__html-content',    // scaffold layout detail pane
+    '.job-view-layout .jobs-description__content',         // new job-view layout
   ];
   const descEl = queryOne(descSelectors) ?? document.querySelector('.jobs-description__content');
-  const description =
-    getDescriptionText(descEl) ||
-    jsonLd?.description ||
-    getMetaContent('description');
+  let description =
+    getDescriptionText(descEl)
+    || jsonLd?.description
+    || '';
+
+  // Heuristic fallback: if selectors found little/no text, scan for the biggest text block.
+  if (!description || description.length < 50) {
+    const fallbackEl = findLargestTextBlock(100);
+    if (fallbackEl) {
+      const fallbackText = getText(fallbackEl);
+      if (fallbackText.length > (description?.length ?? 0)) {
+        description = fallbackText;
+      }
+    }
+  }
+
+  // Last resort metadata/fallbacks.
+  if (!description || description.length < 50) {
+    description =
+      description
+      || getMetaContent('description')
+      || getMetaContent('og:description')
+      || extractDescriptionFromAboutSection();
+  }
 
   // Location selectors — top card metadata area or sidebar
   const locationSelectors = [
-    '.job-details-jobs-unified-top-card__primary-description-container', // /jobs/view (2024+)
-    '.jobs-unified-top-card__primary-description',                      // legacy /jobs/view
-    '.jobs-details-top-card__company-info',                             // collections top card
-    '.job-details-how-you-match__secondary-description',                // match section
-    '[data-job-id] span[class*="primary-description"]',                 // generic fallback
-    '.jobs-search__job-details .jobs-unified-top-card__subtitle',       // search detail pane
+    '.job-details-jobs-unified-top-card__primary-description-container',
+    '.jobs-unified-top-card__primary-description',
+    '.jobs-details-top-card__company-info',
+    '.job-details-how-you-match__secondary-description',
+    '[data-job-id] span[class*="primary-description"]',
+    '.jobs-search__job-details .jobs-unified-top-card__subtitle',
   ];
   const locationEl = queryOne(locationSelectors);
   let location = getText(locationEl) || jsonLd?.location || getMetaContent('og:location');
@@ -186,6 +336,7 @@ export function extractJobData(): JobData | null {
     const locSpan = document.querySelector('.jobs-unified-top-card__bullet');
     if (locSpan) location = getText(locSpan.parentElement);
   }
+  if (!location) location = extractLocationFallback();
 
   // Company — scoped to job detail pane (right side / main content), not left list
   const companySelectors = [
@@ -212,7 +363,42 @@ export function extractJobData(): JobData | null {
     const companyLink = document.querySelector('.jobs-unified-top-card__subtitle a[href*="/company/"], .job-details-jobs-unified-top-card a[href*="/company/"]');
     if (companyLink) company = getText(companyLink).trim();
   }
+  if (!company) company = extractCompanyFallback();
 
+  // #region agent log
+  const _dbg = {
+    url: window.location.href,
+    jobIdFromUrl: getJobIdFromUrl(),
+    jobIdFromDom: getJobIdFromDom(),
+    jsonLdId: jsonLd?.id ?? null,
+    jsonLdTitle: jsonLd?.title?.slice(0, 80) ?? null,
+    jsonLdDescLen: jsonLd?.description?.length ?? 0,
+    titleText: (title || '').slice(0, 80),
+    descLen: (description || '').length,
+    titleElTag: titleEl?.tagName ?? null,
+    titleElClass: titleEl?.className?.slice?.(0, 100) ?? null,
+    descElTag: descEl?.tagName ?? null,
+    descElClass: (descEl as HTMLElement)?.className?.slice?.(0, 100) ?? null,
+    h1Count: document.querySelectorAll('h1').length,
+    h1Texts: Array.from(document.querySelectorAll('h1')).map(e => (e.textContent ?? '').trim().slice(0, 60)),
+    h2Count: document.querySelectorAll('h2').length,
+    h2Texts: Array.from(document.querySelectorAll('h2')).slice(0, 5).map(e => (e.textContent ?? '').trim().slice(0, 60)),
+    metaOgTitle: getMetaContent('og:title').slice(0, 80),
+    metaDesc: getMetaContent('description').slice(0, 80),
+    company,
+    readyState: document.readyState,
+    bodyChildCount: document.body?.children?.length ?? -1,
+    totalElements: document.querySelectorAll('*').length,
+    bodyTextLen: (document.body?.innerText ?? '').length,
+    isTopFrame: typeof window !== 'undefined' && window === window.top,
+    articleCount: document.querySelectorAll('article').length,
+    mainCount: document.querySelectorAll('main').length,
+    sectionCount: document.querySelectorAll('section').length,
+    bodyClassList: document.body?.className?.slice(0, 200) ?? '',
+    firstClasses: Array.from(document.body?.children ?? []).slice(0, 5).map(e => (e as HTMLElement).className?.slice(0, 80) ?? ''),
+  };
+  (window as any).__jobEvalDebug = _dbg;
+  // #endregion
   if (!title && !description) return null;
   return {
     id: jobId || `${title}-${location}`.trim() || 'unknown',
@@ -224,19 +410,54 @@ export function extractJobData(): JobData | null {
 }
 
 /**
- * Retry extractJobData with delays — on collections/search pages the job detail
- * pane loads asynchronously, so the DOM may not be ready on the first attempt.
- * Uses a delay between retries to avoid hammering the main thread.
+ * Retry extractJobData with delays — LinkedIn is an SPA so the job detail pane
+ * loads asynchronously. On /jobs/view/ pages the entire content may take several
+ * seconds to render. Uses exponential backoff + a MutationObserver fallback so
+ * we don't give up too early.
  */
-async function extractJobDataWithRetry(maxRetries = 5, delayMs = 150): Promise<JobData | null> {
+function isUsableJob(job: JobData | null): boolean {
+  if (!job) return false;
+  return !!(job.description && job.description.length > 50);
+}
+
+async function extractJobDataWithRetry(maxRetries = 12, initialDelayMs = 200): Promise<JobData | null> {
+  let lastJob: JobData | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const job = extractJobData();
-    if (job && (job.title !== 'Unknown title' || job.description)) return job;
+    if (job) lastJob = job;
+    if (isUsableJob(job)) return job;
     if (attempt < maxRetries) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const delay = Math.min(initialDelayMs * Math.pow(1.3, attempt), 1500);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
-  return extractJobData();
+
+  // Last resort: wait for meaningful DOM content via MutationObserver (up to 8s)
+  const observed = await new Promise<JobData | null>((resolve) => {
+    const OBSERVER_TIMEOUT_MS = 8000;
+    let resolved = false;
+    const done = (result: JobData | null) => {
+      if (resolved) return;
+      resolved = true;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const observer = new MutationObserver(() => {
+      const job = extractJobData();
+      if (isUsableJob(job)) done(job);
+    });
+    observer.observe(document.body || document.documentElement, {
+      childList: true, subtree: true, characterData: true,
+    });
+    const timer = setTimeout(() => {
+      const final = extractJobData();
+      done(isUsableJob(final) ? final : lastJob);
+    }, OBSERVER_TIMEOUT_MS);
+    const immediate = extractJobData();
+    if (isUsableJob(immediate)) done(immediate);
+  });
+  return observed;
 }
 
 // Notify extension when the selected job changes. Use click on job card as primary signal.
@@ -314,8 +535,13 @@ const LEFT_PANE_LIST_SELECTORS = [
 /** Selectors for job cards when no list container is found (cards in the left pane). */
 const LEFT_PANE_CARD_SELECTORS = [
   '[data-job-id].job-card-container',
+  '[data-occludable-job-id].job-card-container',
   '[data-job-id][class*="jobs-search-two-pane__job-card-container"]',
+  '[data-occludable-job-id][class*="jobs-search-two-pane__job-card-container"]',
   '[data-job-id][class*="job-card-list"]',
+  '[data-occludable-job-id][class*="job-card-list"]',
+  'li[class*="jobs-search-results__list-item"]',
+  '.scaffold-layout__list-item',
 ];
 
 /** Job card / title selectors within a card. */
@@ -339,27 +565,87 @@ export interface LeftPaneJob {
   company: string;
 }
 
+function extractJobIdFromElement(el: Element | null): string | null {
+  if (!el) return null;
+  const selfAttrs = [
+    el.getAttribute('data-job-id'),
+    el.getAttribute('data-occludable-job-id'),
+  ];
+  for (const raw of selfAttrs) {
+    const id = raw?.trim();
+    if (id && /^\d+$/.test(id)) return id;
+  }
+  const selfUrn = el.getAttribute('data-entity-urn');
+  const selfUrnMatch = selfUrn?.match(/:jobPosting:(\d+)/);
+  if (selfUrnMatch) return selfUrnMatch[1];
+
+  const nested = el.querySelector('[data-job-id], [data-occludable-job-id], [data-entity-urn]');
+  if (nested) {
+    const nestedAttrs = [
+      nested.getAttribute('data-job-id'),
+      nested.getAttribute('data-occludable-job-id'),
+    ];
+    for (const raw of nestedAttrs) {
+      const id = raw?.trim();
+      if (id && /^\d+$/.test(id)) return id;
+    }
+    const nestedUrn = nested.getAttribute('data-entity-urn');
+    const nestedUrnMatch = nestedUrn?.match(/:jobPosting:(\d+)/);
+    if (nestedUrnMatch) return nestedUrnMatch[1];
+  }
+
+  const link = el.matches('a[href*="/jobs/view/"]')
+    ? (el as HTMLAnchorElement)
+    : el.querySelector<HTMLAnchorElement>('a[href*="/jobs/view/"]');
+  const href = link?.href ?? link?.getAttribute('href') ?? '';
+  const hrefMatch = href.match(/\/jobs\/view\/(\d+)/);
+  if (hrefMatch) return hrefMatch[1];
+  return null;
+}
+
+function normalizeCardRoot(el: Element): HTMLElement {
+  const root = el.closest<HTMLElement>(
+    '.job-card-container, [class*="jobs-search-two-pane__job-card-container"], [class*="job-card-list"], li[class*="jobs-search-results__list-item"], .scaffold-layout__list-item'
+  );
+  return (root ?? el) as HTMLElement;
+}
+
+function collectCardCandidatesFromContainer(container: Element): Element[] {
+  const explicit = Array.from(
+    container.querySelectorAll(
+      '[data-job-id], [data-occludable-job-id], [data-entity-urn*="jobPosting"], .job-card-container, [class*="jobs-search-two-pane__job-card-container"], [class*="job-card-list"], li[class*="jobs-search-results__list-item"], .scaffold-layout__list-item'
+    )
+  );
+  const fromLinks: Element[] = [];
+  container.querySelectorAll<HTMLAnchorElement>('a[href*="/jobs/view/"]').forEach((a) => {
+    const root = normalizeCardRoot(a);
+    fromLinks.push(root);
+  });
+  return [...explicit, ...fromLinks];
+}
+
 function getLeftPaneJobs(): LeftPaneJob[] {
-  let cards: NodeListOf<Element> | Element[] = [];
+  let cards: Element[] = [];
   let listContainer: Element | null = null;
   for (const sel of LEFT_PANE_LIST_SELECTORS) {
     listContainer = document.querySelector(sel);
     if (listContainer) {
-      cards = listContainer.querySelectorAll('[data-job-id]');
+      cards = collectCardCandidatesFromContainer(listContainer);
       if (cards.length > 0) break;
     }
   }
   // Fallback: LinkedIn may not use a recognizable list container; query list-style cards directly.
   if (cards.length === 0) {
     for (const sel of LEFT_PANE_CARD_SELECTORS) {
-      cards = document.querySelectorAll(sel);
+      cards = Array.from(document.querySelectorAll(sel));
       if (cards.length > 0) break;
     }
   }
   const seen = new Set<string>();
   const jobs: LeftPaneJob[] = [];
-  cards.forEach((el) => {
-    const id = el.getAttribute('data-job-id');
+  cards.forEach((candidate) => {
+    const el = normalizeCardRoot(candidate);
+    const id = extractJobIdFromElement(el);
     if (!id || !/^\d+$/.test(id) || seen.has(id)) return;
     seen.add(id);
     let title = '';
@@ -388,14 +674,18 @@ function getLeftPaneCardElement(jobId: string): HTMLElement | null {
   for (const sel of LEFT_PANE_LIST_SELECTORS) {
     const list = document.querySelector(sel);
     if (!list) continue;
-    const el = list.querySelector<HTMLElement>(`[data-job-id="${jobId}"]`);
-    if (el) return el;
+    const attrMatch = list.querySelector<HTMLElement>(
+      `[data-job-id="${jobId}"], [data-occludable-job-id="${jobId}"], [data-entity-urn*="jobPosting:${jobId}"]`
+    );
+    if (attrMatch) return normalizeCardRoot(attrMatch);
+    const link = list.querySelector<HTMLAnchorElement>(`a[href*="/jobs/view/${jobId}"]`);
+    if (link) return normalizeCardRoot(link);
   }
   // Fallback: find card by id (same card selectors as getLeftPaneJobs).
   const direct = document.querySelector<HTMLElement>(
-    `[data-job-id="${jobId}"].job-card-container, [data-job-id="${jobId}"][class*="jobs-search-two-pane__job-card-container"], [data-job-id="${jobId}"][class*="job-card-list"]`
+    `[data-job-id="${jobId}"], [data-occludable-job-id="${jobId}"], [data-entity-urn*="jobPosting:${jobId}"], a[href*="/jobs/view/${jobId}"]`
   );
-  return direct;
+  return direct ? normalizeCardRoot(direct) : null;
 }
 
 function selectJobById(jobId: string): boolean {
@@ -408,11 +698,10 @@ function selectJobById(jobId: string): boolean {
 
 const JOB_EVAL_CARD_CLASS = 'job-eval-card-anchor';
 const JOB_EVAL_EVALUATING_CLASS = 'job-eval-evaluating';
+const JOB_EVAL_RATE_LIMITED_CLASS = 'job-eval-rate-limited';
 const JOB_EVAL_RECENTLY_VISITED_CLASS = 'job-eval-recently-visited-badge';
 /** Set true to log badge apply/observer/schedule to console for flicker debugging. */
 const DEBUG_RECENTLY_VISITED = true;
-const VISITED_COMPANIES_STORAGE_KEY = 'jobEvalVisitedCompanies';
-const VISITED_COMPANIES_MAX = 500;
 const RECENTLY_VISITED_DAYS = 30;
 /** Evict from storage companies older than this (days). */
 const VISITED_STORAGE_MAX_AGE_DAYS = 7;
@@ -434,6 +723,7 @@ const jobScoreWidgetStyles = `
   .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_EVALUATING_CLASS} {
     animation: job-eval-pulse 1.2s ease-in-out infinite;
   }
+  .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_RATE_LIMITED_CLASS} { background: #e67e22; color: #fff; }
   @keyframes job-eval-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -458,6 +748,7 @@ function ensureScoreWidgetStyles() {
 
 const jobScores = new Map<string, number>();
 const evaluatingJobIds = new Set<string>();
+const rateLimitedJobIds = new Set<string>();
 
 /** Company name (normalized) -> last visit timestamp. Loaded from storage, updated when we record a visit. */
 let visitedCompaniesMap: Record<string, number> = {};
@@ -475,13 +766,11 @@ function pruneVisitedCompaniesOlderThanWeek(): void {
 
 function loadVisitedCompanies(cb?: () => void) {
   try {
-    chrome.storage.local.get(VISITED_COMPANIES_STORAGE_KEY, (result) => {
+    chrome.runtime.sendMessage({ type: 'GET_VISITED_COMPANIES' }, (result: { visitedCompanies?: Record<string, number> }) => {
       try {
-        const raw = result?.[VISITED_COMPANIES_STORAGE_KEY];
+        const raw = result?.visitedCompanies;
         visitedCompaniesMap = typeof raw === 'object' && raw !== null ? raw : {};
         pruneVisitedCompaniesOlderThanWeek();
-        chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => cb?.());
-        return;
       } catch {
         visitedCompaniesMap = {};
       }
@@ -496,17 +785,10 @@ function loadVisitedCompanies(cb?: () => void) {
 function recordVisitedCompany(company: string) {
   const key = normalizeCompany(company);
   if (!key) return;
-  const now = Date.now();
-  visitedCompaniesMap[key] = now;
+  visitedCompaniesMap[key] = Date.now();
   pruneVisitedCompaniesOlderThanWeek();
-  const entries = Object.entries(visitedCompaniesMap);
-  if (entries.length > VISITED_COMPANIES_MAX) {
-    const sorted = entries.sort((a, b) => a[1] - b[1]);
-    const toRemove = sorted.slice(0, entries.length - VISITED_COMPANIES_MAX).map(([k]) => k);
-    toRemove.forEach((k) => delete visitedCompaniesMap[k]);
-  }
   try {
-    chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => {});
+    chrome.runtime.sendMessage({ type: 'RECORD_VISITED_COMPANY', company: key }, () => {});
   } catch {
     // ignore
   }
@@ -530,7 +812,7 @@ function applyBadges() {
 
 function applyBadgesImmediate() {
   ensureScoreWidgetStyles();
-  const allIds = new Set([...jobScores.keys(), ...evaluatingJobIds]);
+  const allIds = new Set([...jobScores.keys(), ...evaluatingJobIds, ...rateLimitedJobIds]);
   allIds.forEach((jobId) => {
     const card = getLeftPaneCardElement(jobId);
     if (!card) return;
@@ -552,6 +834,9 @@ function applyBadgesImmediate() {
       const rounded = Math.round(score);
       badge.textContent = `Score: ${rounded}/100`;
       badge.className = `${JOB_EVAL_WIDGET_CLASS} ${scoreClass(score)}`;
+    } else if (rateLimitedJobIds.has(jobId)) {
+      badge.textContent = 'Rate limited';
+      badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_RATE_LIMITED_CLASS}`;
     } else if (evaluatingJobIds.has(jobId)) {
       badge.textContent = 'Evaluating…';
       badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
@@ -615,6 +900,7 @@ function setJobScores(scores: Record<string, number>) {
   Object.entries(scores).forEach(([id, score]) => {
     jobScores.set(id, score);
     evaluatingJobIds.delete(id);
+    rateLimitedJobIds.delete(id);
   });
   applyBadges();
 }
@@ -622,6 +908,14 @@ function setJobScores(scores: Record<string, number>) {
 function setEvaluatingJobs(jobIds: string[]) {
   evaluatingJobIds.clear();
   jobIds.forEach((id) => evaluatingJobIds.add(id));
+  applyBadges();
+}
+
+function setRateLimitedJobs(jobIds: string[]) {
+  jobIds.forEach((id) => {
+    rateLimitedJobIds.add(id);
+    evaluatingJobIds.delete(id);
+  });
   applyBadges();
 }
 
@@ -770,7 +1064,7 @@ function refreshScoresOnLoad() {
   }
 }
 
-// Only register in top frame so we don't run N copies (main + iframes) that all throw when context invalidates
+// Badge/polling/observer logic runs ONLY in the top frame to avoid duplicate work
 const isTopFrame = typeof window !== 'undefined' && window === window.top;
 if (isTopFrame && isExtensionContextValid()) {
   loadVisitedCompanies(() => {
@@ -778,7 +1072,6 @@ if (isTopFrame && isExtensionContextValid()) {
     applyRecentlyVisitedBadgesImmediate('load');
     attachJobListObserver();
   });
-  // Show cached score tags on page load/reload (job list may render after a delay)
   refreshScoresOnLoad();
   const LOAD_DELAYS_MS = [300, 1000];
   LOAD_DELAYS_MS.forEach((delay) => {
@@ -809,7 +1102,11 @@ if (isTopFrame && isExtensionContextValid()) {
       cleanupAfterInvalidation();
     }
   }, JOB_POLL_MS);
+}
 
+// Message listener runs in ALL frames (including iframes) so that on collections/search
+// pages where the job detail pane is in an iframe, we can still extract job data.
+if (isExtensionContextValid()) {
   chrome.runtime.onMessage.addListener(
     (
       msg: { type: string; jobId?: string; scores?: Record<string, number>; jobIds?: string[] },
@@ -819,12 +1116,12 @@ if (isTopFrame && isExtensionContextValid()) {
       try {
         if (contextInvalidated || !isExtensionContextValid()) {
           contextInvalidated = true;
-          cleanupAfterInvalidation();
+          if (isTopFrame) cleanupAfterInvalidation();
           return false;
         }
       } catch {
         contextInvalidated = true;
-        cleanupAfterInvalidation();
+        if (isTopFrame) cleanupAfterInvalidation();
         return false;
       }
       if (msg.type === 'GET_JOB_DATA') {
@@ -834,18 +1131,21 @@ if (isTopFrame && isExtensionContextValid()) {
             try {
               if (!isExtensionContextValid()) {
                 contextInvalidated = true;
-                cleanupAfterInvalidation();
+                if (isTopFrame) cleanupAfterInvalidation();
                 return;
               }
+              // #region agent log
+              const _dbgData = (window as any).__jobEvalDebug ?? null;
+              // #endregion
               if (job) {
-                if (job.company) recordVisitedCompany(job.company);
-                sendResponse({ ok: true, job });
+                if (isTopFrame && job.company) recordVisitedCompany(job.company);
+                sendResponse({ ok: true, job, _dbg: _dbgData });
               } else {
-                sendResponse({ ok: false, error: 'Could not read job details from this page. Make sure a job is selected.' });
+                sendResponse({ ok: false, error: 'Could not read job details from this page. Make sure a job is selected.', _dbg: _dbgData });
               }
             } catch {
               contextInvalidated = true;
-              cleanupAfterInvalidation();
+              if (isTopFrame) cleanupAfterInvalidation();
             }
           })
           .catch((e) => {
@@ -854,12 +1154,14 @@ if (isTopFrame && isExtensionContextValid()) {
                 sendResponse({ ok: false, error: (e as Error).message });
               } catch {
                 contextInvalidated = true;
-                cleanupAfterInvalidation();
+                if (isTopFrame) cleanupAfterInvalidation();
               }
             }
           });
         return true;
       }
+      // Badge/score handlers only make sense in the top frame
+      if (!isTopFrame) return false;
       if (msg.type === 'GET_LEFT_PANE_JOBS') {
         try {
           const jobs = getLeftPaneJobs();
@@ -896,9 +1198,18 @@ if (isTopFrame && isExtensionContextValid()) {
         }
         return false;
       }
+      if (msg.type === 'SET_RATE_LIMITED_JOBS' && Array.isArray(msg.jobIds)) {
+        try {
+          setRateLimitedJobs(msg.jobIds);
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        return false;
+      }
       return false;
     }
   );
-} else {
+} else if (!isTopFrame) {
   contextInvalidated = true;
 }

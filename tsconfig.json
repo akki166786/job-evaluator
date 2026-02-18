@@ -7,7 +7,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "lib": ["ES2020", "DOM"],
-    "types": ["chrome"]
+    "types": ["chrome"],
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

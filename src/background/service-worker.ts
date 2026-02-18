@@ -1,4 +1,11 @@
-import { getSettings, getAllResumes, getJobEvaluation, saveJobEvaluation } from '../lib/db';
+import {
+  getSettings,
+  getAllResumes,
+  getJobEvaluation,
+  saveJobEvaluation,
+  getVisitedCompaniesMap,
+  recordVisitedCompanyVisit,
+} from '../lib/db';
 import { evaluateJob, PROVIDER_MODELS } from '../lib/llm';
 import type { JobData, EvaluationResult, ApiProvider } from '../lib/types';
 
@@ -8,8 +15,6 @@ chrome.action.onClicked.addListener((tab) => {
     chrome.sidePanel.open({ windowId: tab.windowId });
   }
 });
-
-const PENDING_JOB_KEY = 'pendingJobChange';
 
 const MAX_CONCURRENT_EVALS = 10;
 interface EvalTask {
@@ -80,6 +85,7 @@ function runEvalTask(task: EvalTask): void {
         type: 'EVALUATION_COMPLETE',
         cacheKey: task.cacheKey,
         jobId: task.job.id,
+        senderTabId: task.senderTabId,
         result: result ?? undefined,
         error,
         raw,
@@ -104,14 +110,32 @@ chrome.runtime.onMessage.addListener(
       tabUrl?: string;
       url?: string;
       jobIds?: string[];
+      company?: string;
     },
     sender: chrome.runtime.MessageSender,
-    sendResponse: (r: { error?: string; raw?: string; pending?: boolean; scores?: Record<string, number> } | EvaluationResult) => void
+    sendResponse: (
+      r:
+        | { error?: string; raw?: string; pending?: boolean; scores?: Record<string, number>; visitedCompanies?: Record<string, number>; ok?: boolean }
+        | EvaluationResult
+    ) => void
   ) => {
     if (msg.type === 'JOB_PAGE_CHANGED' && sender.tab?.id != null && msg.url) {
-      chrome.storage.session.set({ [PENDING_JOB_KEY]: { tabId: sender.tab.id, url: msg.url } }).catch(() => {});
       sendResponse({});
       return false;
+    }
+    if (msg.type === 'GET_VISITED_COMPANIES') {
+      (async () => {
+        const visitedCompanies = await getVisitedCompaniesMap().catch(() => ({}));
+        sendResponse({ visitedCompanies });
+      })();
+      return true;
+    }
+    if (msg.type === 'RECORD_VISITED_COMPANY' && typeof msg.company === 'string') {
+      (async () => {
+        await recordVisitedCompanyVisit(msg.company!).catch(() => {});
+        sendResponse({ ok: true });
+      })();
+      return true;
     }
     if (msg.type === 'GET_CACHED_SCORES_FOR_JOBS' && Array.isArray(msg.jobIds)) {
       (async () => {

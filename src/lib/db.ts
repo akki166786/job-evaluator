@@ -8,6 +8,9 @@ const SETTINGS_STORE = 'settings';
 const JOB_EVALS_STORE = 'job_evaluations';
 const MAX_RESUMES = 5;
 const MAX_JOB_EVALS = 1000;
+const VISITED_COMPANIES_SETTINGS_KEY = 'visitedCompanies';
+const VISITED_COMPANIES_MAX = 500;
+const VISITED_STORAGE_MAX_AGE_DAYS = 7;
 
 const SETTINGS_KEYS = [
   'profileIntent',
@@ -229,6 +232,30 @@ export async function getJobEvaluation(jobId: string): Promise<JobEvaluationReco
   });
 }
 
+export interface JobEvaluationStats {
+  total: number;
+  strongMatches: number;
+}
+
+export async function getJobEvaluationStats(): Promise<JobEvaluationStats> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(JOB_EVALS_STORE, 'readonly');
+    const req = t.objectStore(JOB_EVALS_STORE).getAll();
+    req.onsuccess = () => {
+      db.close();
+      const records = (req.result as JobEvaluationRecord[]) ?? [];
+      const total = records.length;
+      const strongMatches = records.filter((r) => r.result?.verdict === 'worth').length;
+      resolve({ total, strongMatches });
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
 async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
   return new Promise((resolve, reject) => {
     const t = db.transaction(JOB_EVALS_STORE, 'readwrite');
@@ -290,4 +317,73 @@ export async function saveJobEvaluation(jobId: string, result: EvaluationResult)
       reject(req.error);
     };
   });
+}
+
+function normalizeCompany(name: string): string {
+  return (name || '').trim();
+}
+
+function pruneVisitedCompanies(map: Record<string, number>): Record<string, number> {
+  const cutoff = Date.now() - VISITED_STORAGE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const pruned: Record<string, number> = {};
+  for (const [k, ts] of Object.entries(map)) {
+    if (typeof ts === 'number' && ts >= cutoff) pruned[k] = ts;
+  }
+  const entries = Object.entries(pruned);
+  if (entries.length <= VISITED_COMPANIES_MAX) return pruned;
+  const sorted = entries.sort((a, b) => a[1] - b[1]);
+  const keep = sorted.slice(entries.length - VISITED_COMPANIES_MAX);
+  return Object.fromEntries(keep);
+}
+
+async function readVisitedCompanies(): Promise<Record<string, number>> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(SETTINGS_STORE, 'readonly');
+    const req = t.objectStore(SETTINGS_STORE).get(VISITED_COMPANIES_SETTINGS_KEY);
+    req.onsuccess = () => {
+      db.close();
+      const row = req.result as { key: string; value: Record<string, number> } | undefined;
+      const raw = row?.value;
+      resolve(raw && typeof raw === 'object' ? raw : {});
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
+async function writeVisitedCompanies(map: Record<string, number>): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(SETTINGS_STORE, 'readwrite');
+    const req = t.objectStore(SETTINGS_STORE).put({ key: VISITED_COMPANIES_SETTINGS_KEY, value: map });
+    req.onsuccess = () => {
+      db.close();
+      resolve();
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
+export async function getVisitedCompaniesMap(): Promise<Record<string, number>> {
+  const current = await readVisitedCompanies();
+  const pruned = pruneVisitedCompanies(current);
+  if (Object.keys(pruned).length !== Object.keys(current).length) {
+    await writeVisitedCompanies(pruned).catch(() => {});
+  }
+  return pruned;
+}
+
+export async function recordVisitedCompanyVisit(company: string): Promise<void> {
+  const key = normalizeCompany(company);
+  if (!key) return;
+  const current = await readVisitedCompanies();
+  current[key] = Date.now();
+  const pruned = pruneVisitedCompanies(current);
+  await writeVisitedCompanies(pruned);
 }

@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+  }
+  body {
+    @apply bg-gray-100 text-gray-950 antialiased min-w-[320px] max-w-[400px];
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+}
