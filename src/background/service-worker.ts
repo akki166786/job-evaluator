@@ -80,6 +80,7 @@ function runEvalTask(task: EvalTask): void {
         type: 'EVALUATION_COMPLETE',
         cacheKey: task.cacheKey,
         jobId: task.job.id,
+        senderTabId: task.senderTabId,
         result: result ?? undefined,
         error,
         raw,

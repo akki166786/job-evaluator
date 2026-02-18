@@ -229,6 +229,30 @@ export async function getJobEvaluation(jobId: string): Promise<JobEvaluationReco
   });
 }
 
+export interface JobEvaluationStats {
+  total: number;
+  strongMatches: number;
+}
+
+export async function getJobEvaluationStats(): Promise<JobEvaluationStats> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(JOB_EVALS_STORE, 'readonly');
+    const req = t.objectStore(JOB_EVALS_STORE).getAll();
+    req.onsuccess = () => {
+      db.close();
+      const records = (req.result as JobEvaluationRecord[]) ?? [];
+      const total = records.length;
+      const strongMatches = records.filter((r) => r.result?.verdict === 'worth').length;
+      resolve({ total, strongMatches });
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
+    };
+  });
+}
+
 async function trimJobEvaluations(db: IDBDatabase): Promise<void> {
   return new Promise((resolve, reject) => {
     const t = db.transaction(JOB_EVALS_STORE, 'readwrite');
