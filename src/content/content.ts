@@ -702,8 +702,6 @@ const JOB_EVAL_RATE_LIMITED_CLASS = 'job-eval-rate-limited';
 const JOB_EVAL_RECENTLY_VISITED_CLASS = 'job-eval-recently-visited-badge';
 /** Set true to log badge apply/observer/schedule to console for flicker debugging. */
 const DEBUG_RECENTLY_VISITED = true;
-const VISITED_COMPANIES_STORAGE_KEY = 'jobEvalVisitedCompanies';
-const VISITED_COMPANIES_MAX = 500;
 const RECENTLY_VISITED_DAYS = 30;
 /** Evict from storage companies older than this (days). */
 const VISITED_STORAGE_MAX_AGE_DAYS = 7;
@@ -768,13 +766,11 @@ function pruneVisitedCompaniesOlderThanWeek(): void {
 
 function loadVisitedCompanies(cb?: () => void) {
   try {
-    chrome.storage.local.get(VISITED_COMPANIES_STORAGE_KEY, (result) => {
+    chrome.runtime.sendMessage({ type: 'GET_VISITED_COMPANIES' }, (result: { visitedCompanies?: Record<string, number> }) => {
       try {
-        const raw = result?.[VISITED_COMPANIES_STORAGE_KEY];
+        const raw = result?.visitedCompanies;
         visitedCompaniesMap = typeof raw === 'object' && raw !== null ? raw : {};
         pruneVisitedCompaniesOlderThanWeek();
-        chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => cb?.());
-        return;
       } catch {
         visitedCompaniesMap = {};
       }
@@ -789,17 +785,10 @@ function loadVisitedCompanies(cb?: () => void) {
 function recordVisitedCompany(company: string) {
   const key = normalizeCompany(company);
   if (!key) return;
-  const now = Date.now();
-  visitedCompaniesMap[key] = now;
+  visitedCompaniesMap[key] = Date.now();
   pruneVisitedCompaniesOlderThanWeek();
-  const entries = Object.entries(visitedCompaniesMap);
-  if (entries.length > VISITED_COMPANIES_MAX) {
-    const sorted = entries.sort((a, b) => a[1] - b[1]);
-    const toRemove = sorted.slice(0, entries.length - VISITED_COMPANIES_MAX).map(([k]) => k);
-    toRemove.forEach((k) => delete visitedCompaniesMap[k]);
-  }
   try {
-    chrome.storage.local.set({ [VISITED_COMPANIES_STORAGE_KEY]: visitedCompaniesMap }, () => {});
+    chrome.runtime.sendMessage({ type: 'RECORD_VISITED_COMPANY', company: key }, () => {});
   } catch {
     // ignore
   }

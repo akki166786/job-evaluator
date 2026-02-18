@@ -1083,7 +1083,6 @@ renderProcessingJobs();
   await renderResumes();
   await renderResumeCheckboxes();
   await updateEvaluateHint();
-  chrome.storage.session.remove('pendingJobChange').catch(() => {});
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id && isLinkedInJobPage(tab.url)) {
     if (isJobListPage(tab.url)) {
