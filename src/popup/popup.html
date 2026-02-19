@@ -80,6 +80,11 @@
         <option value="anthropic">Anthropic</option>
         <option value="openrouter">OpenRouter</option>
       </select>
+      <div id="activeProvidersWrap" class="active-providers-wrap">
+        <label class="label">Active agents (for rotation)</label>
+        <p class="hint" style="margin-top: 0; margin-bottom: 8px; font-size: 11px;">Select providers to rotate between. If none selected, uses all configured providers.</p>
+        <div id="activeProvidersList" class="active-providers-list"></div>
+      </div>
       <div id="modelWrap" class="api-key-wrap">
         <label class="label" id="modelLabel">Model (optional)</label>
         <input type="text" id="modelInput" class="input" placeholder="Default model" aria-labelledby="modelLabel" />
