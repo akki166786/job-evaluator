@@ -16,7 +16,25 @@ chrome.action.onClicked.addListener((tab) => {
   }
 });
 
-const MAX_CONCURRENT_EVALS = 10;
+const PENDING_JOB_KEY = 'pendingJobChange';
+
+const PROVIDER_ROTATION_KEY = 'jobEvalProviderRotation';
+
+/**
+ * Rate-limit strategy for 3–20 jobs (OpenRouter + Groq).
+ * - OpenRouter: per-model limits, DDoS protection; spreading across providers helps.
+ *   https://openrouter.ai/docs/api/reference/limits
+ * - Groq: e.g. 30 RPM on free tier; RPD/TPM also apply.
+ *   https://console.groq.com/docs/rate-limits
+ * Strategy: turn-based rotation, max 4 in-flight per provider, stagger starts (0/5/10/15s)
+ * so we stay under ~30 RPM per provider; rest wait in queue for a slot.
+ */
+const MAX_PER_PROVIDER = 4;
+const DELAY_STEP_MS = 5000;
+const DELAY_CAP_MS = 15000;
+/** Groq free tier ~30 RPM → 1 req per 2s; min interval between starts per provider. */
+const MIN_INTERVAL_BETWEEN_STARTS_MS = 2000;
+
 interface EvalTask {
   job: JobData;
   resumeIds: string[] | undefined;
@@ -26,13 +44,73 @@ interface EvalTask {
 }
 let inFlightCount = 0;
 const pendingQueue: EvalTask[] = [];
+const providerInFlightCount: Partial<Record<ApiProvider, number>> = {};
+
+/** Get all configured providers (those with API keys, or ollama if available). */
+function getConfiguredProviders(settings: { apiKeys: Partial<Record<ApiProvider, string>>; apiProvider: ApiProvider; activeProviders?: ApiProvider[] }): ApiProvider[] {
+  if (settings.activeProviders && settings.activeProviders.length > 0) {
+    return settings.activeProviders.filter((p) => {
+      if (p === 'ollama') return true;
+      const key = settings.apiKeys[p];
+      return key && key.trim();
+    });
+  }
+  const providers: ApiProvider[] = [];
+  const allProviders: ApiProvider[] = ['ollama', 'openai', 'anthropic', 'openrouter', 'google', 'groq'];
+  for (const provider of allProviders) {
+    if (provider === 'ollama') {
+      providers.push(provider);
+    } else {
+      const key = settings.apiKeys[provider];
+      if (key && key.trim()) {
+        providers.push(provider);
+      }
+    }
+  }
+  return providers.length > 0 ? providers : [settings.apiProvider];
+}
+
+/** Peek next provider in rotation without advancing (for slot check). */
+async function peekNextProvider(configuredProviders: ApiProvider[]): Promise<ApiProvider> {
+  if (configuredProviders.length === 1) return configuredProviders[0];
+  const stored = await chrome.storage.local.get(PROVIDER_ROTATION_KEY);
+  let lastIndex = typeof stored[PROVIDER_ROTATION_KEY] === 'number' ? stored[PROVIDER_ROTATION_KEY] : -1;
+  if (lastIndex >= configuredProviders.length || lastIndex < 0) lastIndex = -1;
+  const nextIndex = (lastIndex + 1) % configuredProviders.length;
+  return configuredProviders[nextIndex];
+}
+
+/** Get next provider in rotation and advance. */
+async function getNextProvider(configuredProviders: ApiProvider[]): Promise<ApiProvider> {
+  if (configuredProviders.length === 1) return configuredProviders[0];
+  const stored = await chrome.storage.local.get(PROVIDER_ROTATION_KEY);
+  let lastIndex = typeof stored[PROVIDER_ROTATION_KEY] === 'number' ? stored[PROVIDER_ROTATION_KEY] : -1;
+  if (lastIndex >= configuredProviders.length || lastIndex < 0) lastIndex = -1;
+  const nextIndex = (lastIndex + 1) % configuredProviders.length;
+  await chrome.storage.local.set({ [PROVIDER_ROTATION_KEY]: nextIndex });
+  return configuredProviders[nextIndex];
+}
+
+/** Start one task from queue if the next provider has a free slot. Advance rotation when assigning to avoid race. */
+async function tryStartNext(): Promise<void> {
+  if (pendingQueue.length === 0) return;
+  const settings = await getSettings();
+  const configured = getConfiguredProviders(settings);
+  if (configured.length === 0) return;
+  const nextProvider = await peekNextProvider(configured);
+  if ((providerInFlightCount[nextProvider] ?? 0) >= MAX_PER_PROVIDER) return;
+  const task = pendingQueue.shift()!;
+  const provider = await getNextProvider(configured);
+  runEvalTask(task, provider);
+}
 
 function isJobListPage(url: string | undefined): boolean {
   if (!url) return false;
   return /^https:\/\/www\.linkedin\.com\/jobs\/search\//.test(url) || /^https:\/\/www\.linkedin\.com\/jobs\/collections\//.test(url);
 }
 
-function runEvalTask(task: EvalTask): void {
+function runEvalTask(task: EvalTask, assignedProvider: ApiProvider): void {
+  const provider = assignedProvider;
   inFlightCount++;
   (async () => {
     let result: EvaluationResult | null = null;
@@ -40,8 +118,17 @@ function runEvalTask(task: EvalTask): void {
     let raw: string | undefined;
     try {
       const settings = await getSettings();
+      const count = providerInFlightCount[provider] ?? 0;
+      providerInFlightCount[provider] = count + 1;
+      const delayMs = Math.min(
+        Math.max(count * DELAY_STEP_MS, count > 0 ? MIN_INTERVAL_BETWEEN_STARTS_MS : 0),
+        DELAY_CAP_MS
+      );
+      if (delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
       let resumes = await getAllResumes();
-      if (settings.apiProvider === 'ollama') {
+      if (provider === 'ollama') {
         resumes = [];
       } else if (task.resumeIds && task.resumeIds.length > 0) {
         const idSet = new Set(task.resumeIds);
@@ -49,7 +136,6 @@ function runEvalTask(task: EvalTask): void {
       } else {
         resumes = [];
       }
-      const provider = settings.apiProvider as ApiProvider;
       const effectiveModel =
         provider === 'ollama'
           ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() ||
@@ -62,7 +148,7 @@ function runEvalTask(task: EvalTask): void {
         settings.skillsTechStack,
         settings.negativeFilters,
         provider,
-        settings.apiKeys?.[settings.apiProvider] ?? '',
+        settings.apiKeys?.[provider] ?? '',
         effectiveModel
       );
       await saveJobEvaluation(task.cacheKey, result);
@@ -80,7 +166,13 @@ function runEvalTask(task: EvalTask): void {
       const err = e as Error;
       error = err.message || 'Evaluation failed.';
       raw = err.message;
+      if (error === 'Rate limited.') {
+        pendingQueue.push(task);
+      }
     } finally {
+      const n = (providerInFlightCount[provider] ?? 1) - 1;
+      if (n <= 0) delete providerInFlightCount[provider];
+      else providerInFlightCount[provider] = n;
       chrome.runtime.sendMessage({
         type: 'EVALUATION_COMPLETE',
         cacheKey: task.cacheKey,
@@ -91,10 +183,7 @@ function runEvalTask(task: EvalTask): void {
         raw,
       }).catch(() => {});
       inFlightCount--;
-      if (pendingQueue.length > 0 && inFlightCount < MAX_CONCURRENT_EVALS) {
-        const next = pendingQueue.shift()!;
-        runEvalTask(next);
-      }
+      tryStartNext();
     }
   })();
 }
@@ -160,11 +249,8 @@ chrome.runtime.onMessage.addListener(
       senderTabId: msg.senderTabId,
       tabUrl: msg.tabUrl,
     };
-    if (inFlightCount < MAX_CONCURRENT_EVALS) {
-      runEvalTask(task);
-    } else {
-      pendingQueue.push(task);
-    }
+    pendingQueue.push(task);
+    tryStartNext();
     sendResponse({ pending: true });
     return false;
   }

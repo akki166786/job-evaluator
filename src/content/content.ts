@@ -722,6 +722,7 @@ const jobScoreWidgetStyles = `
   .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_EVALUATING_CLASS} { background: #5c6bc0; color: #fff; }
   .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_EVALUATING_CLASS} {
     animation: job-eval-pulse 1.2s ease-in-out infinite;
+    font-variant-numeric: tabular-nums;
   }
   .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_RATE_LIMITED_CLASS} { background: #e67e22; color: #fff; }
   @keyframes job-eval-pulse {
@@ -749,6 +750,8 @@ function ensureScoreWidgetStyles() {
 const jobScores = new Map<string, number>();
 const evaluatingJobIds = new Set<string>();
 const rateLimitedJobIds = new Set<string>();
+/** jobId -> startedAt (ms) for timer in evaluating badge. */
+const evaluatingJobStartedAt = new Map<string, number>();
 
 /** Company name (normalized) -> last visit timestamp. Loaded from storage, updated when we record a visit. */
 let visitedCompaniesMap: Record<string, number> = {};
@@ -838,7 +841,9 @@ function applyBadgesImmediate() {
       badge.textContent = 'Rate limited';
       badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_RATE_LIMITED_CLASS}`;
     } else if (evaluatingJobIds.has(jobId)) {
-      badge.textContent = 'Evaluating…';
+      const startedAt = evaluatingJobStartedAt.get(jobId) ?? Date.now();
+      const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+      badge.textContent = `Evaluating… ${elapsedSec}s`;
       badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
     }
   });
@@ -905,10 +910,30 @@ function setJobScores(scores: Record<string, number>) {
   applyBadges();
 }
 
-function setEvaluatingJobs(jobIds: string[]) {
+let evaluatingTimerIntervalId: ReturnType<typeof setInterval> | null = null;
+
+function setEvaluatingJobs(jobs: Array<{ jobId: string; startedAt: number }>) {
   evaluatingJobIds.clear();
-  jobIds.forEach((id) => evaluatingJobIds.add(id));
+  evaluatingJobStartedAt.clear();
+  jobs.forEach(({ jobId, startedAt }) => {
+    evaluatingJobIds.add(jobId);
+    evaluatingJobStartedAt.set(jobId, startedAt);
+  });
   applyBadges();
+  if (evaluatingTimerIntervalId != null) {
+    clearInterval(evaluatingTimerIntervalId);
+    evaluatingTimerIntervalId = null;
+  }
+  if (evaluatingJobIds.size > 0) {
+    evaluatingTimerIntervalId = setInterval(() => {
+      if (evaluatingJobIds.size === 0) {
+        if (evaluatingTimerIntervalId != null) clearInterval(evaluatingTimerIntervalId);
+        evaluatingTimerIntervalId = null;
+        return;
+      }
+      applyBadges();
+    }, 1000);
+  }
 }
 
 function setRateLimitedJobs(jobIds: string[]) {
@@ -1189,9 +1214,12 @@ if (isExtensionContextValid()) {
         }
         return false;
       }
-      if (msg.type === 'SET_EVALUATING_JOBS' && Array.isArray(msg.jobIds)) {
+      if (msg.type === 'SET_EVALUATING_JOBS') {
         try {
-          setEvaluatingJobs(msg.jobIds);
+          const jobs = Array.isArray(msg.jobs)
+            ? msg.jobs
+            : (Array.isArray(msg.jobIds) ? msg.jobIds : []).map((jobId: string) => ({ jobId, startedAt: Date.now() }));
+          setEvaluatingJobs(jobs);
           sendResponse({ ok: true });
         } catch (e) {
           sendResponse({ ok: false, error: (e as Error).message });
