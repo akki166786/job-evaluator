@@ -27,13 +27,26 @@ export type ProcessingJob = {
   title: string;
   status: 'pending' | 'done' | 'rate_limited';
   score?: number;
+  startedAt?: number;
+  retryCount?: number;
+  lastError?: string;
+  lastProvider?: string;
 };
 
 const PROCESSING_TITLE_MAX = 45;
-const PENDING_TIMEOUT_MS = 60 * 1000;
+const RETRY_WINDOW_MS = 2 * 60 * 1000; // Show "Retrying" for 2 min, then "Failed"
 const REMOVE_DONE_MS = 10 * 1000;
-const REMOVE_FAILED_MS = 20 * 1000;
 const HIGH_SCORE_KEEP = 75;
+
+export function isJobFailed(j: ProcessingJob): boolean {
+  if (j.status !== 'pending' || !j.lastError) return false;
+  const startedAt = j.startedAt ?? 0;
+  return Date.now() - startedAt >= RETRY_WINDOW_MS;
+}
+
+export function isJobRetrying(j: ProcessingJob): boolean {
+  return j.status === 'pending' && !!j.lastError && !isJobFailed(j);
+}
 
 function shortenTitle(title: string): string {
   const t = (title || '').trim();
@@ -68,23 +81,49 @@ export function useEvaluation(
     getAllResumes().then(setResumes).catch(() => setResumes([]));
   }, []);
 
-  const sendEvaluatingIdsToTab = useCallback(async (jobIds: string[], tabId?: number) => {
-    const tab =
-      tabId != null
-        ? await chrome.tabs.get(tabId).catch(() => null)
-        : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
-    if (!tab?.id || !isLinkedInJobPage(tab.url)) return;
-    try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobIds });
-    } catch {
-      /* tab or content script unavailable */
-    }
-  }, []);
+  type EvaluatingJobPayload = {
+    jobId: string;
+    startedAt: number;
+    status: 'evaluating' | 'retrying' | 'failed';
+    retryCount?: number;
+    provider?: string;
+    isRateLimit?: boolean;
+  };
 
-  const sendEvaluatingJobsToTab = useCallback(async (tabId?: number) => {
-    const ids = processingJobs.filter((j) => j.status === 'pending').map((j) => j.jobId);
-    await sendEvaluatingIdsToTab(ids, tabId);
-  }, [processingJobs, sendEvaluatingIdsToTab]);
+  const sendEvaluatingJobsToTab = useCallback(
+    async (tabId?: number) => {
+      const tab =
+        tabId != null
+          ? await chrome.tabs.get(tabId).catch(() => null)
+          : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      if (!tab?.id || !isLinkedInJobPage(tab.url)) return;
+      const now = Date.now();
+      const jobs: EvaluatingJobPayload[] = processingJobs
+        .filter((j) => j.status === 'pending')
+        .map((j) => {
+          const startedAt = j.startedAt ?? now;
+          const elapsed = now - startedAt;
+          const hasError = !!j.lastError;
+          const status: 'evaluating' | 'retrying' | 'failed' =
+            hasError && elapsed >= RETRY_WINDOW_MS ? 'failed' : hasError ? 'retrying' : 'evaluating';
+          const isRateLimit = j.lastError?.toLowerCase().includes('rate limit') ?? false;
+          return {
+            jobId: j.jobId,
+            startedAt,
+            status,
+            retryCount: j.retryCount,
+            provider: j.lastProvider,
+            isRateLimit,
+          };
+        });
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobs });
+      } catch {
+        /* tab or content script unavailable */
+      }
+    },
+    [processingJobs]
+  );
 
   const sendRateLimitedToTab = useCallback(async (jobIds: string[], tabId?: number) => {
     const tab =
@@ -145,10 +184,40 @@ export function useEvaluation(
     };
   }, [refreshCachedScoresOnPage]);
 
+  // Background sends EVALUATION_RATE_LIMITED when rate limited (before 10s retry) so we can show "Rate limit/Retry #N"
+  useEffect(() => {
+    const listener = (msg: { type: string; cacheKey?: string; jobId?: string; retryCount?: number; provider?: string }) => {
+      if (msg.type !== 'EVALUATION_RATE_LIMITED' || msg.cacheKey == null) return;
+      setProcessingJobs((prev) =>
+        prev.map((x) =>
+          x.cacheKey === msg.cacheKey
+            ? {
+                ...x,
+                lastError: 'Rate limited.',
+                retryCount: msg.retryCount ?? (x.retryCount ?? 0) + 1,
+                lastProvider: msg.provider,
+              }
+            : x
+        )
+      );
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
+
   // When evaluation runs in background (pending: true), background sends EVALUATION_COMPLETE when done
   useEffect(() => {
     const listener = (
-      msg: { type: string; cacheKey?: string; jobId?: string; result?: EvaluationResult; error?: string; raw?: string; senderTabId?: number }
+      msg: {
+        type: string;
+        cacheKey?: string;
+        jobId?: string;
+        result?: EvaluationResult;
+        error?: string;
+        raw?: string;
+        senderTabId?: number;
+        provider?: string;
+      }
     ) => {
       if (msg.type !== 'EVALUATION_COMPLETE' || msg.cacheKey == null) return;
       const cacheKey = msg.cacheKey;
@@ -165,12 +234,33 @@ export function useEvaluation(
         const j = prev.find((x) => x.cacheKey === cacheKey);
         if (!j) return prev;
         if (isRateLimited) {
-          return prev.map((x) => (x.cacheKey === cacheKey ? { ...x, status: 'rate_limited' as const, score: undefined } : x));
+          return prev.map((x) =>
+            x.cacheKey === cacheKey
+              ? {
+                  ...x,
+                  status: 'rate_limited' as const,
+                  score: undefined,
+                  retryCount: (x.retryCount ?? 0) + 1,
+                  lastError: msg.error,
+                  lastProvider: msg.provider,
+                }
+              : x
+          );
         }
         if (msg.error) {
-          const next = prev.map((x) => (x.cacheKey === cacheKey ? { ...x, status: 'done' as const, score: undefined } : x));
-          setTimeout(() => setProcessingJobs((p) => p.filter((x) => x.cacheKey !== cacheKey)), REMOVE_FAILED_MS);
-          return next;
+          // Keep job in list as pending; show Retrying then Failed after 2 min (no auto-remove)
+          return prev.map((x) =>
+            x.cacheKey === cacheKey
+              ? {
+                  ...x,
+                  status: 'pending' as const,
+                  score: undefined,
+                  retryCount: (x.retryCount ?? 0) + 1,
+                  lastError: msg.error,
+                  lastProvider: msg.provider,
+                }
+              : x
+          );
         }
         if (msg.result) {
           log(`EVALUATION_COMPLETE: ${msg.result.score}/100 — ${msg.result.verdict}`);
@@ -332,10 +422,6 @@ export function useEvaluation(
       }
 
       if ((result as { pending?: boolean }).pending) {
-        // Push evaluating badge immediately so fast jobs still show "Evaluating…".
-        const currentPendingIds = processingJobs.filter((j) => j.status === 'pending').map((j) => j.jobId);
-        const nextPendingIds = Array.from(new Set([...currentPendingIds, job.id]));
-        sendEvaluatingIdsToTab(nextPendingIds, tab.id);
         setState((s) => ({
           ...s,
           loading: true,
@@ -351,16 +437,8 @@ export function useEvaluation(
             jobId: job.id,
             title: shortenTitle(job.title || job.id),
             status: 'pending',
+            startedAt: Date.now(),
           };
-          const id = setTimeout(() => {
-            pendingTimeoutsRef.current.delete(cacheKey);
-            setProcessingJobs((p) => {
-              const next = p.map((x) => (x.cacheKey === cacheKey ? { ...x, status: 'done' as const } : x));
-              setTimeout(() => setProcessingJobs((n) => n.filter((x) => x.cacheKey !== cacheKey)), REMOVE_FAILED_MS);
-              return next;
-            });
-          }, PENDING_TIMEOUT_MS);
-          pendingTimeoutsRef.current.set(cacheKey, id);
           return [entry, ...filtered];
         });
         log('Evaluation queued (pending)');
@@ -407,7 +485,7 @@ export function useEvaluation(
       }));
       log('Exception: ' + err.message, 'error');
     }
-  }, [selectedResumeIds, log, sendRateLimitedToTab, processingJobs, sendEvaluatingIdsToTab]);
+  }, [selectedResumeIds, log, sendRateLimitedToTab, processingJobs]);
 
   const reRun = useCallback(async () => {
     const { pendingRerun } = state;
@@ -485,6 +563,51 @@ export function useEvaluation(
     setProcessingJobs((prev) => prev.filter((j) => j.cacheKey !== cacheKey));
   }, []);
 
+  const retryJob = useCallback(
+    async (cacheKey: string) => {
+      const j = processingJobs.find((x) => x.cacheKey === cacheKey);
+      if (!j) return;
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id || !isLinkedInJobPage(tab.url)) {
+        log('Open the LinkedIn job page to retry.', 'warn');
+        return;
+      }
+      let response: { ok?: boolean; job?: JobData } | undefined;
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_JOB_DATA' });
+      } catch {
+        log('Could not read job from page.', 'error');
+        return;
+      }
+      if (!response?.ok || !response.job || response.job.id !== j.jobId) {
+        log('Job on page does not match. Open the job and click Retry.', 'warn');
+        return;
+      }
+      const job = response.job;
+      const resumeIds = selectedResumeIds.length > 0 ? selectedResumeIds : undefined;
+      setProcessingJobs((prev) =>
+        prev.map((x) =>
+          x.cacheKey === cacheKey
+            ? { ...x, retryCount: 0, lastError: undefined, lastProvider: undefined, startedAt: Date.now() }
+            : x
+        )
+      );
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'EVALUATE_JOB',
+          job,
+          resumeIds,
+          cacheKey,
+          senderTabId: tab.id,
+          tabUrl: tab.url,
+        });
+      } catch (e) {
+        log('Retry failed: ' + (e as Error).message, 'error');
+      }
+    },
+    [processingJobs, selectedResumeIds, log]
+  );
+
   return {
     resumes,
     ...state,
@@ -494,5 +617,6 @@ export function useEvaluation(
     refetchResumes: () => getAllResumes().then(setResumes),
     processingJobs,
     removeFromProcessingList,
+    retryJob,
   };
 }

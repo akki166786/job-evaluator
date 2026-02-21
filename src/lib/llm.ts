@@ -226,7 +226,7 @@ function normalizeResult(raw: EvaluationResultRaw): EvaluationResult {
   };
 }
 
-/** Call the LLM and return a structured evaluation. */
+/** Call the LLM and return a structured evaluation plus raw response text for debug. */
 export async function evaluateJob(
   job: JobData,
   resumes: ResumeRecord[],
@@ -236,7 +236,7 @@ export async function evaluateJob(
   provider: ApiProvider,
   apiKey: string,
   model: string
-): Promise<EvaluationResult> {
+): Promise<{ result: EvaluationResult; rawText: string }> {
   if (provider !== 'ollama' && !apiKey) {
     throw new Error('API key required for this provider.');
   }
@@ -276,8 +276,9 @@ export async function evaluateJob(
     }
     const data = await res.json();
     const text = data.content?.[0]?.text ?? data.content ?? '';
-    const raw = parseJsonFromResponse(text);
-    return normalizeResult(raw);
+    const textStr = typeof text === 'string' ? text : JSON.stringify(data);
+    const raw = parseJsonFromResponse(textStr);
+    return { result: normalizeResult(raw), rawText: textStr };
   }
 
   if (provider === 'google') {
@@ -315,8 +316,9 @@ export async function evaluateJob(
     }
     const data = await res.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    const raw = parseJsonFromResponse(text);
-    return normalizeResult(raw);
+    const textStr = typeof text === 'string' ? text : JSON.stringify(data);
+    const raw = parseJsonFromResponse(textStr);
+    return { result: normalizeResult(raw), rawText: textStr };
   }
 
   // OpenAI-compatible (Ollama, OpenAI, Groq, OpenRouter)
@@ -371,6 +373,7 @@ export async function evaluateJob(
   }
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content ?? '';
-  const raw = parseJsonFromResponse(text);
-  return normalizeResult(raw);
+  const textStr = typeof text === 'string' ? text : JSON.stringify(data);
+  const raw = parseJsonFromResponse(textStr);
+  return { result: normalizeResult(raw), rawText: textStr };
 }

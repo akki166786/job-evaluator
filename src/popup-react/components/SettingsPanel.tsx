@@ -5,6 +5,8 @@ import { getSettings, saveSettings } from '@/lib/db';
 import { PROVIDER_MODELS } from '@/lib/llm';
 import type { ApiProvider, SettingsRecord } from '@/lib/types';
 
+const ALL_PROVIDERS: ApiProvider[] = ['ollama', 'groq', 'google', 'openai', 'anthropic', 'openrouter'];
+
 const PROVIDER_LABELS: Record<ApiProvider, string> = {
   ollama: 'Ollama (local)',
   groq: 'Groq',
@@ -23,6 +25,7 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
   const [model, setModel] = useState('');
   const [apiKeys, setApiKeys] = useState<Partial<Record<ApiProvider, string>>>({});
   const [providerModels, setProviderModels] = useState<Partial<Record<ApiProvider, string>>>({});
+  const [activeProviders, setActiveProviders] = useState<ApiProvider[]>([]);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -33,6 +36,7 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
       setApiProvider(s.apiProvider);
       setApiKeys(s.apiKeys ?? {});
       setProviderModels(s.providerModels ?? {});
+      setActiveProviders(s.activeProviders ?? []);
       setApiKey(s.apiKeys?.[s.apiProvider] ?? '');
       setModel(s.providerModels?.[s.apiProvider] ?? '');
     });
@@ -61,6 +65,7 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
       apiKeys: nextApiKeys,
       ollamaModel: nextProviderModels.ollama ?? 'llama3.1:8b',
       providerModels: nextProviderModels,
+      activeProviders: activeProviders.length > 0 ? activeProviders : [],
     });
     setApiKeys(nextApiKeys);
     setProviderModels(nextProviderModels);
@@ -134,6 +139,34 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
           />
         </div>
       )}
+
+      <hr className="border-gray-200" />
+
+      <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+        <label className="block text-sm font-medium text-gray-700">Active agents (for rotation)</label>
+        <p className="mt-0.5 mb-2 text-xs text-gray-500">
+          Select providers to rotate between. If none selected, all configured providers are used.
+        </p>
+        <div className="flex flex-col gap-2">
+          {ALL_PROVIDERS.map((provider) => (
+            <label key={provider} className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={activeProviders.includes(provider)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setActiveProviders((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
+                  } else {
+                    setActiveProviders((prev) => prev.filter((p) => p !== provider));
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              {PROVIDER_LABELS[provider]}
+            </label>
+          ))}
+        </div>
+      </div>
 
       <div className="flex gap-2">
         <Button onClick={handleSave}>{saved ? 'Saved' : 'Save settings'}</Button>

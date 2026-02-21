@@ -1,8 +1,16 @@
-import { useRef, useEffect } from 'react';
-import { Home } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Home, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 
 type DebugEntry = { ts: string; msg: string; level: 'info' | 'warn' | 'error' };
+
+type QueueSnapshot = {
+  queueLength: number;
+  queueJobIds: string[];
+  inFlightPerProvider: Record<string, number>;
+  configured: string[];
+  activeProviders: string[] | null;
+} | null;
 
 export function DebugPanel({
   entries,
@@ -14,10 +22,18 @@ export function DebugPanel({
   onBack: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [entries.length]);
+
+  const refreshQueue = () => {
+    chrome.runtime.sendMessage({ type: 'GET_QUEUE_DEBUG' }, (res: QueueSnapshot) => {
+      if (chrome.runtime.lastError) setQueueSnapshot(null);
+      else setQueueSnapshot(res ?? null);
+    });
+  };
 
   return (
     <div className="flex flex-col p-4">
@@ -33,9 +49,32 @@ export function DebugPanel({
           </Button>
         </div>
       </div>
+
+      <div className="mb-3 rounded border border-gray-200 bg-gray-50 p-2 font-mono text-xs">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-medium text-gray-700">Queue state</span>
+          <Button variant="ghost" size="sm" onClick={refreshQueue} className="h-7 px-2">
+            <RefreshCw className="mr-1 h-3 w-3" />
+            Refresh
+          </Button>
+        </div>
+        {queueSnapshot == null ? (
+          <p className="text-gray-500">Click Refresh to load.</p>
+        ) : (
+          <div className="space-y-0.5 text-gray-800">
+            <div>Waiting: {queueSnapshot.queueLength} {queueSnapshot.queueJobIds.length ? `[${queueSnapshot.queueJobIds.join(', ')}]` : ''}</div>
+            <div>In-flight: {Object.entries(queueSnapshot.inFlightPerProvider).length ? Object.entries(queueSnapshot.inFlightPerProvider).map(([p, n]) => `${p}: ${n}`).join(', ') : '0'}</div>
+            <div>Configured: [{queueSnapshot.configured.join(', ')}]</div>
+            {queueSnapshot.activeProviders != null && queueSnapshot.activeProviders.length > 0 && (
+              <div>Active agents: [{queueSnapshot.activeProviders.join(', ')}]</div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div
         ref={scrollRef}
-        className="max-h-[360px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-xs"
+        className="max-h-[300px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-xs"
         role="log"
       >
         {entries.length === 0 && <p className="text-gray-500">No entries yet.</p>}

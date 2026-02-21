@@ -725,6 +725,7 @@ const jobScoreWidgetStyles = `
     font-variant-numeric: tabular-nums;
   }
   .${JOB_EVAL_WIDGET_CLASS}.${JOB_EVAL_RATE_LIMITED_CLASS} { background: #e67e22; color: #fff; }
+  .${JOB_EVAL_WIDGET_CLASS}.job-eval-failed { background: #95a5a6; color: #fff; }
   @keyframes job-eval-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -752,6 +753,14 @@ const evaluatingJobIds = new Set<string>();
 const rateLimitedJobIds = new Set<string>();
 /** jobId -> startedAt (ms) for timer in evaluating badge. */
 const evaluatingJobStartedAt = new Map<string, number>();
+/** jobId -> 'evaluating' | 'retrying' | 'failed' for badge label. */
+const evaluatingJobStatus = new Map<string, 'evaluating' | 'retrying' | 'failed'>();
+/** jobId -> retry count for "Retrying (N)". */
+const evaluatingJobRetryCount = new Map<string, number>();
+/** jobId -> provider name for "Retrying with Groq". */
+const evaluatingJobProvider = new Map<string, string>();
+/** jobId -> true when retry is due to rate limit (show "Rate limit/Retry #N"). */
+const evaluatingJobIsRateLimit = new Map<string, boolean>();
 
 /** Company name (normalized) -> last visit timestamp. Loaded from storage, updated when we record a visit. */
 let visitedCompaniesMap: Record<string, number> = {};
@@ -843,8 +852,26 @@ function applyBadgesImmediate() {
     } else if (evaluatingJobIds.has(jobId)) {
       const startedAt = evaluatingJobStartedAt.get(jobId) ?? Date.now();
       const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
-      badge.textContent = `Evaluating… ${elapsedSec}s`;
-      badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+      const status = evaluatingJobStatus.get(jobId) ?? 'evaluating';
+      const retryCount = evaluatingJobRetryCount.get(jobId) ?? 0;
+      const provider = evaluatingJobProvider.get(jobId) ?? '';
+      const isRateLimit = evaluatingJobIsRateLimit.get(jobId) ?? false;
+      if (status === 'failed') {
+        badge.textContent = 'Failed';
+        badge.className = `${JOB_EVAL_WIDGET_CLASS} job-eval-failed`;
+      } else if (status === 'retrying' && isRateLimit) {
+        badge.textContent = `Rate limit/Retry #${retryCount || 1}… ${elapsedSec}s`;
+        badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+      } else if (status === 'retrying' && provider) {
+        badge.textContent = `Retrying with ${provider} (${retryCount})… ${elapsedSec}s`;
+        badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+      } else if (status === 'retrying') {
+        badge.textContent = `Retrying (${retryCount})… ${elapsedSec}s`;
+        badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+      } else {
+        badge.textContent = `Evaluating… ${elapsedSec}s`;
+        badge.className = `${JOB_EVAL_WIDGET_CLASS} ${JOB_EVAL_EVALUATING_CLASS}`;
+      }
     }
   });
   // Recently-visited badges are applied only by the dedicated interval (and once on load) to avoid flicker from repeated runs
@@ -912,12 +939,29 @@ function setJobScores(scores: Record<string, number>) {
 
 let evaluatingTimerIntervalId: ReturnType<typeof setInterval> | null = null;
 
-function setEvaluatingJobs(jobs: Array<{ jobId: string; startedAt: number }>) {
+function setEvaluatingJobs(
+  jobs: Array<{
+    jobId: string;
+    startedAt: number;
+    status?: 'evaluating' | 'retrying' | 'failed';
+    retryCount?: number;
+    provider?: string;
+    isRateLimit?: boolean;
+  }>
+) {
   evaluatingJobIds.clear();
   evaluatingJobStartedAt.clear();
-  jobs.forEach(({ jobId, startedAt }) => {
+  evaluatingJobStatus.clear();
+  evaluatingJobRetryCount.clear();
+  evaluatingJobProvider.clear();
+  evaluatingJobIsRateLimit.clear();
+  jobs.forEach(({ jobId, startedAt, status, retryCount, provider, isRateLimit }) => {
     evaluatingJobIds.add(jobId);
     evaluatingJobStartedAt.set(jobId, startedAt);
+    if (status) evaluatingJobStatus.set(jobId, status);
+    if (retryCount != null) evaluatingJobRetryCount.set(jobId, retryCount);
+    if (provider) evaluatingJobProvider.set(jobId, provider);
+    if (isRateLimit) evaluatingJobIsRateLimit.set(jobId, true);
   });
   applyBadges();
   if (evaluatingTimerIntervalId != null) {

@@ -16,25 +16,6 @@ chrome.action.onClicked.addListener((tab) => {
   }
 });
 
-const PENDING_JOB_KEY = 'pendingJobChange';
-
-const PROVIDER_ROTATION_KEY = 'jobEvalProviderRotation';
-
-/**
- * Rate-limit strategy for 3–20 jobs (OpenRouter + Groq).
- * - OpenRouter: per-model limits, DDoS protection; spreading across providers helps.
- *   https://openrouter.ai/docs/api/reference/limits
- * - Groq: e.g. 30 RPM on free tier; RPD/TPM also apply.
- *   https://console.groq.com/docs/rate-limits
- * Strategy: turn-based rotation, max 4 in-flight per provider, stagger starts (0/5/10/15s)
- * so we stay under ~30 RPM per provider; rest wait in queue for a slot.
- */
-const MAX_PER_PROVIDER = 4;
-const DELAY_STEP_MS = 5000;
-const DELAY_CAP_MS = 15000;
-/** Groq free tier ~30 RPM → 1 req per 2s; min interval between starts per provider. */
-const MIN_INTERVAL_BETWEEN_STARTS_MS = 2000;
-
 interface EvalTask {
   job: JobData;
   resumeIds: string[] | undefined;
@@ -42,65 +23,56 @@ interface EvalTask {
   senderTabId: number | undefined;
   tabUrl: string | undefined;
 }
-let inFlightCount = 0;
-const pendingQueue: EvalTask[] = [];
-const providerInFlightCount: Partial<Record<ApiProvider, number>> = {};
+
+const RATE_LIMIT_RETRY_MS = 10_000;
+const TASK_FAIL_TIMEOUT_MS = 2 * 60 * 1000;
+
+let pendingQueue: EvalTask[] = [];
+let inFlight: { task: EvalTask; provider: ApiProvider } | null = null;
+let lastProviderIndex = -1;
+
+function debugLog(msg: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+  chrome.runtime.sendMessage({ type: 'DEBUG_LOG', msg, level }).catch(() => {});
+}
 
 /** Get all configured providers (those with API keys, or ollama if available). */
 function getConfiguredProviders(settings: { apiKeys: Partial<Record<ApiProvider, string>>; apiProvider: ApiProvider; activeProviders?: ApiProvider[] }): ApiProvider[] {
+  const hasKey = (p: ApiProvider) => p === 'ollama' || !!(settings.apiKeys[p] && settings.apiKeys[p]!.trim());
+
   if (settings.activeProviders && settings.activeProviders.length > 0) {
-    return settings.activeProviders.filter((p) => {
-      if (p === 'ollama') return true;
-      const key = settings.apiKeys[p];
-      return key && key.trim();
-    });
+    const fromActive = settings.activeProviders.filter(hasKey);
+    if (fromActive.length > 0) return fromActive;
+    // Active agents set but none have keys → fall back to default so we don't get stuck
   }
   const providers: ApiProvider[] = [];
   const allProviders: ApiProvider[] = ['ollama', 'openai', 'anthropic', 'openrouter', 'google', 'groq'];
   for (const provider of allProviders) {
-    if (provider === 'ollama') {
-      providers.push(provider);
-    } else {
-      const key = settings.apiKeys[provider];
-      if (key && key.trim()) {
-        providers.push(provider);
-      }
-    }
+    if (hasKey(provider)) providers.push(provider);
   }
   return providers.length > 0 ? providers : [settings.apiProvider];
 }
 
-/** Peek next provider in rotation without advancing (for slot check). */
-async function peekNextProvider(configuredProviders: ApiProvider[]): Promise<ApiProvider> {
-  if (configuredProviders.length === 1) return configuredProviders[0];
-  const stored = await chrome.storage.local.get(PROVIDER_ROTATION_KEY);
-  let lastIndex = typeof stored[PROVIDER_ROTATION_KEY] === 'number' ? stored[PROVIDER_ROTATION_KEY] : -1;
-  if (lastIndex >= configuredProviders.length || lastIndex < 0) lastIndex = -1;
-  const nextIndex = (lastIndex + 1) % configuredProviders.length;
-  return configuredProviders[nextIndex];
+/** Round-robin: next provider index. */
+function getNextProvider(configured: ApiProvider[]): ApiProvider {
+  if (configured.length === 0) throw new Error('no providers');
+  lastProviderIndex = (lastProviderIndex + 1) % configured.length;
+  return configured[lastProviderIndex];
 }
 
-/** Get next provider in rotation and advance. */
-async function getNextProvider(configuredProviders: ApiProvider[]): Promise<ApiProvider> {
-  if (configuredProviders.length === 1) return configuredProviders[0];
-  const stored = await chrome.storage.local.get(PROVIDER_ROTATION_KEY);
-  let lastIndex = typeof stored[PROVIDER_ROTATION_KEY] === 'number' ? stored[PROVIDER_ROTATION_KEY] : -1;
-  if (lastIndex >= configuredProviders.length || lastIndex < 0) lastIndex = -1;
-  const nextIndex = (lastIndex + 1) % configuredProviders.length;
-  await chrome.storage.local.set({ [PROVIDER_ROTATION_KEY]: nextIndex });
-  return configuredProviders[nextIndex];
-}
-
-/** Start one task from queue if the next provider has a free slot. Advance rotation when assigning to avoid race. */
+/** Start the next queued task only when no task is in flight. One at a time, round-robin provider. */
 async function tryStartNext(): Promise<void> {
+  if (inFlight != null) return;
   if (pendingQueue.length === 0) return;
   const settings = await getSettings();
   const configured = getConfiguredProviders(settings);
-  if (configured.length === 0) return;
-  const nextProvider = await peekNextProvider(configured);
-  if ((providerInFlightCount[nextProvider] ?? 0) >= MAX_PER_PROVIDER) return;
+  if (configured.length === 0) {
+    debugLog('[queue] skip: no configured providers', 'warn');
+    return;
+  }
   const task = pendingQueue.shift()!;
-  const provider = await getNextProvider(configured);
+  const provider = getNextProvider(configured);
+  inFlight = { task, provider };
+  debugLog(`[queue] starting jobId=${task.job.id} provider=${provider} queueLen=${pendingQueue.length}`);
   runEvalTask(task, provider);
 }
 
@@ -109,28 +81,35 @@ function isJobListPage(url: string | undefined): boolean {
   return /^https:\/\/www\.linkedin\.com\/jobs\/search\//.test(url) || /^https:\/\/www\.linkedin\.com\/jobs\/collections\//.test(url);
 }
 
-function runEvalTask(task: EvalTask, assignedProvider: ApiProvider): void {
+function runEvalTask(task: EvalTask, assignedProvider: ApiProvider, retryAttempt = 0): void {
   const provider = assignedProvider;
-  inFlightCount++;
+  const taskStartedAt = Date.now();
+
+  function done(result: EvaluationResult | undefined, error: string | undefined, raw: string | undefined) {
+    inFlight = null;
+    chrome.runtime.sendMessage({
+      type: 'EVALUATION_COMPLETE',
+      cacheKey: task.cacheKey,
+      jobId: task.job.id,
+      senderTabId: task.senderTabId,
+      result,
+      error,
+      raw,
+      provider,
+    }).catch(() => {});
+    tryStartNext();
+  }
+
   (async () => {
     let result: EvaluationResult | null = null;
     let error: string | undefined;
     let raw: string | undefined;
     try {
       const settings = await getSettings();
-      const count = providerInFlightCount[provider] ?? 0;
-      providerInFlightCount[provider] = count + 1;
-      const delayMs = Math.min(
-        Math.max(count * DELAY_STEP_MS, count > 0 ? MIN_INTERVAL_BETWEEN_STARTS_MS : 0),
-        DELAY_CAP_MS
-      );
-      if (delayMs > 0) {
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
       let resumes = await getAllResumes();
       if (provider === 'ollama') {
         resumes = [];
-      } else if (task.resumeIds && task.resumeIds.length > 0) {
+      } else if (task.resumeIds?.length) {
         const idSet = new Set(task.resumeIds);
         resumes = resumes.filter((r) => idSet.has(r.id));
       } else {
@@ -138,19 +117,28 @@ function runEvalTask(task: EvalTask, assignedProvider: ApiProvider): void {
       }
       const effectiveModel =
         provider === 'ollama'
-          ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() ||
-            PROVIDER_MODELS.ollama
+          ? (settings.ollamaModel || settings.providerModels?.ollama || PROVIDER_MODELS.ollama).trim() || PROVIDER_MODELS.ollama
           : (settings.providerModels?.[provider]?.trim() || PROVIDER_MODELS[provider]);
-      result = await evaluateJob(
+      const apiKey = settings.apiKeys?.[provider] ?? '';
+      debugLog(`[model] jobId=${task.job.id} provider=${provider} model=${effectiveModel}`);
+      const startMs = Date.now();
+      const evalPromise = evaluateJob(
         task.job,
         resumes,
         settings.profileIntent,
         settings.skillsTechStack,
         settings.negativeFilters,
         provider,
-        settings.apiKeys?.[provider] ?? '',
+        apiKey,
         effectiveModel
       );
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout (2 min)')), TASK_FAIL_TIMEOUT_MS)
+      );
+      const evalOut = await Promise.race([evalPromise, timeoutPromise]);
+      result = evalOut.result;
+      const elapsedMs = Date.now() - startMs;
+      debugLog(`[model] reply jobId=${task.job.id} provider=${provider} score=${result.score} (${elapsedMs}ms)`);
       await saveJobEvaluation(task.cacheKey, result);
       if (task.senderTabId != null && isJobListPage(task.tabUrl)) {
         try {
@@ -159,31 +147,36 @@ function runEvalTask(task: EvalTask, assignedProvider: ApiProvider): void {
             scores: { [task.job.id]: result!.score },
           });
         } catch {
-          /* tab closed or context invalid */
+          /* tab closed */
         }
       }
+      done(result, undefined, undefined);
     } catch (e) {
       const err = e as Error;
       error = err.message || 'Evaluation failed.';
       raw = err.message;
+      debugLog(`[model] jobId=${task.job.id} provider=${provider} error=${error}`, 'warn');
       if (error === 'Rate limited.') {
-        pendingQueue.push(task);
+        const elapsed = Date.now() - taskStartedAt;
+        const retryCount = retryAttempt + 1;
+        chrome.runtime.sendMessage({
+          type: 'EVALUATION_RATE_LIMITED',
+          cacheKey: task.cacheKey,
+          jobId: task.job.id,
+          senderTabId: task.senderTabId,
+          retryCount,
+          provider,
+        }).catch(() => {});
+        if (elapsed >= TASK_FAIL_TIMEOUT_MS) {
+          debugLog(`[queue] jobId=${task.job.id} gave up after 2 min (rate limited)`);
+          done(undefined, error, raw);
+        } else {
+          debugLog(`[queue] jobId=${task.job.id} rate limited, retry #${retryCount} in 10s`);
+          setTimeout(() => runEvalTask(task, provider, retryCount), RATE_LIMIT_RETRY_MS);
+        }
+      } else {
+        done(undefined, error, raw);
       }
-    } finally {
-      const n = (providerInFlightCount[provider] ?? 1) - 1;
-      if (n <= 0) delete providerInFlightCount[provider];
-      else providerInFlightCount[provider] = n;
-      chrome.runtime.sendMessage({
-        type: 'EVALUATION_COMPLETE',
-        cacheKey: task.cacheKey,
-        jobId: task.job.id,
-        senderTabId: task.senderTabId,
-        result: result ?? undefined,
-        error,
-        raw,
-      }).catch(() => {});
-      inFlightCount--;
-      tryStartNext();
     }
   })();
 }
@@ -237,21 +230,36 @@ chrome.runtime.onMessage.addListener(
       })();
       return true;
     }
-    if (msg.type !== 'EVALUATE_JOB' || !msg.job) {
-      sendResponse({ error: 'Missing job data.' });
+    if (msg.type === 'GET_QUEUE_DEBUG') {
+      (async () => {
+        const settings = await getSettings();
+        const configured = getConfiguredProviders(settings);
+        sendResponse({
+          queueLength: pendingQueue.length,
+          queueJobIds: pendingQueue.map((t) => t.job.id),
+          inFlightPerProvider: inFlight ? { [inFlight.provider]: 1 } : {},
+          configured,
+          activeProviders: settings.activeProviders ?? null,
+        });
+      })();
+      return true;
+    }
+    if (msg.type === 'EVALUATE_JOB' && msg.job) {
+      const cacheKey = msg.cacheKey ?? msg.job.id;
+      const task: EvalTask = {
+        job: msg.job,
+        resumeIds: msg.resumeIds,
+        cacheKey,
+        senderTabId: msg.senderTabId,
+        tabUrl: msg.tabUrl,
+      };
+      pendingQueue.push(task);
+      debugLog(`[queue] enqueued jobId=${task.job.id} queueLen=${pendingQueue.length}`);
+      tryStartNext();
+      sendResponse({ pending: true });
       return false;
     }
-    const cacheKey = msg.cacheKey ?? msg.job.id;
-    const task: EvalTask = {
-      job: msg.job,
-      resumeIds: msg.resumeIds,
-      cacheKey,
-      senderTabId: msg.senderTabId,
-      tabUrl: msg.tabUrl,
-    };
-    pendingQueue.push(task);
-    tryStartNext();
-    sendResponse({ pending: true });
+    sendResponse({ error: 'Missing job data.' });
     return false;
   }
 );
