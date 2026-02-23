@@ -132,10 +132,12 @@ function runEvalTask(task: EvalTask, assignedProvider: ApiProvider, retryAttempt
         apiKey,
         effectiveModel
       );
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout (2 min)')), TASK_FAIL_TIMEOUT_MS)
-      );
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Timeout (2 min)')), TASK_FAIL_TIMEOUT_MS);
+      });
       const evalOut = await Promise.race([evalPromise, timeoutPromise]);
+      if (timeoutId) clearTimeout(timeoutId);
       result = evalOut.result;
       const elapsedMs = Date.now() - startMs;
       debugLog(`[model] reply jobId=${task.job.id} provider=${provider} score=${result.score} (${elapsedMs}ms)`);
