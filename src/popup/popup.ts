@@ -114,9 +114,12 @@ const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
 const apiKeyLabelEl = document.getElementById('apiKeyLabel')!;
 const modelWrap = document.getElementById('modelWrap')!;
 const modelEl = document.getElementById('modelInput') as HTMLInputElement;
+const activeProvidersWrap = document.getElementById('activeProvidersWrap')!;
+const activeProvidersList = document.getElementById('activeProvidersList')!;
 const saveSettingsBtn = document.getElementById('saveSettings')!;
 let apiKeys: Partial<Record<ApiProvider, string>> = {};
 let providerModels: Partial<Record<ApiProvider, string>> = {};
+let activeProviders: ApiProvider[] = [];
 
 const PROVIDER_LABELS: Record<ApiProvider, string> = {
   ollama: 'Ollama',
@@ -127,6 +130,33 @@ const PROVIDER_LABELS: Record<ApiProvider, string> = {
   openrouter: 'OpenRouter',
 };
 
+const ALL_PROVIDERS: ApiProvider[] = ['ollama', 'groq', 'google', 'openai', 'anthropic', 'openrouter'];
+
+function renderActiveProviders() {
+  activeProvidersList.innerHTML = ALL_PROVIDERS.map((provider) => {
+    const checked = activeProviders.includes(provider);
+    const hasKey = provider === 'ollama' || !!(apiKeys[provider]?.trim());
+    return `
+      <label>
+        <input type="checkbox" data-provider="${provider}" ${checked ? 'checked' : ''} ${!hasKey ? 'disabled' : ''} />
+        <span>${PROVIDER_LABELS[provider]}${!hasKey ? ' (no API key)' : ''}</span>
+      </label>
+    `;
+  }).join('');
+  activeProvidersList.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const provider = (checkbox as HTMLInputElement).dataset.provider as ApiProvider;
+      if ((checkbox as HTMLInputElement).checked) {
+        if (!activeProviders.includes(provider)) {
+          activeProviders.push(provider);
+        }
+      } else {
+        activeProviders = activeProviders.filter((p) => p !== provider);
+      }
+    });
+  });
+}
+
 function showProviderFields() {
   const provider = apiProviderEl.value as ApiProvider;
   const needKey = provider !== 'ollama';
@@ -135,6 +165,7 @@ function showProviderFields() {
   apiKeyLabelEl.textContent = `${PROVIDER_LABELS[provider]} API key`;
   modelEl.placeholder = `e.g. ${PROVIDER_MODELS[provider]}`;
   modelEl.value = providerModels[provider] ?? '';
+  renderActiveProviders();
 }
 
 apiProviderEl.addEventListener('change', () => {
@@ -147,6 +178,10 @@ apiProviderEl.addEventListener('change', () => {
   }
   apiProviderEl.dataset.currentProvider = nextProvider;
   showProviderFields();
+});
+
+apiKeyEl.addEventListener('input', () => {
+  renderActiveProviders();
 });
 
 saveSettingsBtn.addEventListener('click', async () => {
@@ -173,9 +208,11 @@ saveSettingsBtn.addEventListener('click', async () => {
     apiKeys: nextApiKeys,
     ollamaModel: nextProviderModels.ollama ?? 'llama3.1:8b',
     providerModels: nextProviderModels,
+    activeProviders: activeProviders.length > 0 ? activeProviders : undefined,
   });
   apiKeys = nextApiKeys;
   providerModels = nextProviderModels;
+  renderActiveProviders();
   saveSettingsBtn.textContent = 'Saved';
   setTimeout(() => (saveSettingsBtn.textContent = 'Save settings'), 1500);
   const resumeHint = document.getElementById('resumeHint');
@@ -194,6 +231,7 @@ async function loadSettings() {
   apiProviderEl.dataset.currentProvider = s.apiProvider;
   apiKeys = s.apiKeys ?? {};
   providerModels = s.providerModels ?? {};
+  activeProviders = s.activeProviders ?? [];
   showProviderFields();
   const resumeHint = document.getElementById('resumeHint');
   if (resumeHint) {
@@ -451,9 +489,27 @@ interface ProcessingJob {
   title: string;
   status: 'pending' | 'done';
   score?: number;
+  startedAt?: number;
 }
 let processingJobs: ProcessingJob[] = [];
 const pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+let processingJobTimerIntervalId: ReturnType<typeof setInterval> | null = null;
+
+/** Queue list: seconds only + "s" (e.g. "45s"). */
+function formatElapsedSeconds(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  return `${s}s`;
+}
+
+function updateProcessingJobTimers(): void {
+  const list = document.getElementById('processingJobsList');
+  if (!list) return;
+  const now = Date.now();
+  list.querySelectorAll<HTMLElement>('.job-pending-timer').forEach((el) => {
+    const started = parseInt(el.getAttribute('data-started') ?? '0', 10);
+    el.textContent = formatElapsedSeconds(now - started);
+  });
+}
 
 function shortenTitle(title: string): string {
   const t = (title || '').trim();
@@ -468,13 +524,15 @@ function removeFromProcessingList(cacheKey: string): void {
   sendEvaluatingJobsToTab();
 }
 
-/** Send current pending job IDs to the active tab so content script can show "Evaluating…" on those cards. */
+/** Send current pending jobs (id + startedAt) to the active tab so content script can show "Evaluating…" and timer on cards. */
 async function sendEvaluatingJobsToTab(tabId?: number): Promise<void> {
-  const ids = processingJobs.filter((j) => j.status === 'pending').map((j) => j.jobId);
+  const jobs = processingJobs
+    .filter((j) => j.status === 'pending')
+    .map((j) => ({ jobId: j.jobId, startedAt: j.startedAt ?? Date.now() }));
   const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   if (!tab?.id || !isLinkedInJobPage(tab.url)) return;
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobIds: ids });
+    await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobs });
   } catch {
     /* tab or content script unavailable */
   }
@@ -502,7 +560,7 @@ function addToProcessingList(cacheKey: string, jobId: string, title: string, for
   pendingTimeouts.delete(cacheKey);
 
   processingJobs = processingJobs.filter((j) => j.cacheKey !== cacheKey);
-  processingJobs.unshift({ cacheKey, jobId, title: shortenTitle(title), status: 'pending' });
+  processingJobs.unshift({ cacheKey, jobId, title: shortenTitle(title), status: 'pending', startedAt: Date.now() });
   const timeoutId = setTimeout(() => {
     pendingTimeouts.delete(cacheKey);
     markAsFailed(cacheKey);
@@ -551,13 +609,21 @@ function renderProcessingJobs(): void {
           `<span class="job-title" title="${escapeHtml(j.title)}">${escapeHtml(j.title)}</span>` +
           (j.status === 'done'
             ? `<span class="job-score">${j.score != null ? `${j.score}/100` : '—'}</span>`
-            : `<span class="job-pending">Evaluating…</span>`) +
+            : `<span class="job-pending">Evaluating… <span class="job-pending-timer" data-started="${j.startedAt ?? Date.now()}">0s</span></span>`) +
           `<button type="button" class="processing-job-remove" data-cache-key="${escapeHtml(j.cacheKey)}" aria-label="Remove from list" title="Remove from list">×</button>` +
           `</div>`
         );
       }
     )
     .join('');
+  if (processingJobTimerIntervalId != null) {
+    clearInterval(processingJobTimerIntervalId);
+    processingJobTimerIntervalId = null;
+  }
+  if (processingJobs.some((j) => j.status === 'pending')) {
+    updateProcessingJobTimers();
+    processingJobTimerIntervalId = setInterval(updateProcessingJobTimers, 1000);
+  }
 }
 
 const LINKEDIN_JOB_VIEW = /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+/;
@@ -829,7 +895,7 @@ async function runEvaluation(): Promise<void> {
       evalHint.classList.remove('hidden');
       debugLog('Error: ' + result.error, 'error');
       lastErrorWasRateLimit = result.error === 'Rate limited.';
-      errorText.textContent = result.error;
+      errorText.textContent = result.error === 'Rate limited.' ? 'Added to queue' : result.error;
       errorWrap.classList.remove('hidden');
       if (result.raw) {
         resultRaw.classList.remove('hidden');
@@ -872,7 +938,7 @@ async function runEvaluation(): Promise<void> {
     loadingWrap.classList.add('hidden');
     await updateEvaluateHint();
     evalHint.classList.remove('hidden');
-    errorText.textContent = err.message;
+    errorText.textContent = err.message === 'Rate limited.' ? 'Added to queue' : err.message;
     errorWrap.classList.remove('hidden');
     lastShownJobId = null;
     lastShownJobTitle = null;
@@ -921,7 +987,7 @@ async function runRecalculate() {
       tabUrl: tab.url,
     });
     if (result?.error) {
-      errorText.textContent = result.error;
+      errorText.textContent = result.error === 'Rate limited.' ? 'Added to queue' : result.error;
       errorWrap.classList.remove('hidden');
       if (result.raw) {
         resultRaw.classList.remove('hidden');
@@ -937,7 +1003,8 @@ async function runRecalculate() {
       evalHint.classList.remove('hidden');
     }
   } catch (e) {
-    errorText.textContent = (e as Error).message;
+    const msg = (e as Error).message;
+    errorText.textContent = msg === 'Rate limited.' ? 'Added to queue' : msg;
     errorWrap.classList.remove('hidden');
   }
 }
@@ -1113,7 +1180,7 @@ chrome.runtime.onMessage.addListener((msg: { type: string; jobId?: string; url?:
         resultRaw.classList.add('hidden');
         debugLog('Background eval error: ' + msg.error, 'error');
         lastErrorWasRateLimit = msg.error === 'Rate limited.';
-        errorText.textContent = msg.error;
+        errorText.textContent = msg.error === 'Rate limited.' ? 'Added to queue' : msg.error;
         if (msg.raw) {
           resultRaw.classList.remove('hidden');
           resultRawText.textContent = msg.raw;

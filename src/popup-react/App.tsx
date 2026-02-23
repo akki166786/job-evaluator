@@ -60,12 +60,28 @@ export default function App() {
 
   const clearDebugLog = useCallback(() => setDebugEntries([]), []);
 
+  // Listen for debug messages from background (queue / model calls)
+  useEffect(() => {
+    const listener = (msg: { type?: string; msg?: string; level?: 'info' | 'warn' | 'error' }) => {
+      if (msg?.type === 'DEBUG_LOG' && typeof msg.msg === 'string') {
+        addDebugLog(msg.msg, msg.level ?? 'info');
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, [addDebugLog]);
+
   return (
     <div className="flex min-h-[400px] flex-col bg-gray-100">
       <header className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 py-2">
-        <h1 className="text-sm font-semibold text-gray-900">
+        <button
+          type="button"
+          onClick={() => setTab('main')}
+          className="text-left text-sm font-semibold text-gray-900 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300 rounded"
+          aria-label="Go to Home"
+        >
           AI Job Evaluator {version && <span className="text-gray-500">{version}</span>}
-        </h1>
+        </button>
         <nav className="flex items-center gap-1">
           <Button
             variant={tab === 'settings' ? 'secondary' : 'ghost'}

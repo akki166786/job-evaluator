@@ -26,6 +26,8 @@ export interface SettingsRecord {
   ollamaModel: string;
   /** Per-provider model override; when empty for a provider, app uses default model. */
   providerModels?: Partial<Record<ApiProvider, string>>;
+  /** Providers to use for rotation (if empty, auto-detect from configured API keys). */
+  activeProviders?: ApiProvider[];
 }
 
 export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'groq';

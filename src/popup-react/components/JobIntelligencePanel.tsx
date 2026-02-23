@@ -5,7 +5,7 @@ import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Progress } from './ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
-import { useEvaluation } from '../hooks/useEvaluation';
+import { useEvaluation, isJobFailed, isJobRetrying } from '../hooks/useEvaluation';
 import { cn } from '../lib/utils';
 import { getSettings, getJobEvaluationStats } from '@/lib/db';
 
@@ -68,6 +68,7 @@ export function JobIntelligencePanel({
     refetchResumes,
     processingJobs,
     removeFromProcessingList,
+    retryJob,
   } = useEvaluation(selectedResumeIds, onDebugLog);
 
   useEffect(() => {
@@ -236,6 +237,30 @@ export function JobIntelligencePanel({
                   <span className="shrink-0 text-xs font-medium text-orange-600">Rate limited</span>
                 ) : j.status === 'done' ? (
                   <span className="shrink-0 text-xs text-gray-500">{j.score != null ? `${j.score}/100` : '—'}</span>
+                ) : isJobFailed(j) ? (
+                  <span className="flex shrink-0 items-center gap-1">
+                    <span className="text-xs font-medium text-gray-600">Failed</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-1.5 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        retryJob(j.cacheKey);
+                      }}
+                    >
+                      Retry
+                    </Button>
+                  </span>
+                ) : isJobRetrying(j) &&
+                  (j.lastError?.toLowerCase().includes('rate limit') ?? false) ? (
+                  <span className="shrink-0 text-xs text-amber-600">
+                    Rate limit/Retry #{(j.retryCount ?? 1)}
+                  </span>
+                ) : isJobRetrying(j) ? (
+                  <span className="shrink-0 text-xs text-amber-600">
+                    Retrying{j.lastProvider ? ` with ${j.lastProvider}` : ''} ({(j.retryCount ?? 0)})
+                  </span>
                 ) : (
                   <span className="shrink-0 text-xs text-blue-600">Evaluating…</span>
                 )}

@@ -20,6 +20,7 @@ const SETTINGS_KEYS = [
   'apiKeys',
   'ollamaModel',
   'providerModels',
+  'activeProviders',
 ] as const;
 
 function openDB(): Promise<IDBDatabase> {
@@ -164,6 +165,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     apiKeys,
     ollamaModel,
     providerModels,
+    activeProviders,
     legacyApiKey,
   ] = await Promise.all([
     getSetting('profileIntent'),
@@ -173,6 +175,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     getSetting('apiKeys'),
     getSetting('ollamaModel'),
     getSetting('providerModels').catch(() => undefined),
+    getSetting('activeProviders').catch(() => undefined),
     getLegacyApiKey(),
   ]);
   // Migrate legacy single apiKey (v1) to per-provider apiKeys map (v2)
@@ -196,6 +199,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     apiKeys: normalizedApiKeys,
     ollamaModel,
     providerModels: normalizedProviderModels,
+    activeProviders: Array.isArray(activeProviders) ? activeProviders : undefined,
   };
 }
 
