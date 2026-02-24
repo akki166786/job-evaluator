@@ -40,6 +40,84 @@ Each provider stores its own API key and model override separately. You can set 
 
 > **Tip:** The quickest way to get started is with an API key. Groq has been giving the fastest and best results — and it's free. See [Groq setup](#groq-setup) below.
 
+## Super simple setup guide (non-technical)
+
+If this is your first time, follow these exact steps:
+
+1. Install this extension (see [Installation](#installation)).
+2. Open any LinkedIn job post in Chrome.
+3. Click the extension icon to open the side panel.
+4. Open the **Settings** tab.
+5. Choose one AI provider (Groq is easiest for most people).
+6. Get that provider's API key (steps below), paste it into **API key**, then click **Save settings**.
+7. Go back to the job post and click **Evaluate this job**.
+
+That’s it — you’ll get a score and a simple “apply / maybe / skip” recommendation.
+
+### How to get API keys (step-by-step)
+
+Use the provider you prefer. You only need **one** key to start.
+
+#### 1) Groq (free tier, easiest)
+
+Link: [https://console.groq.com](https://console.groq.com)
+
+1. Open the link.
+2. Sign up or log in.
+3. Go to API Keys.
+4. Click **Create API key**.
+5. Copy the key.
+6. In extension **Settings**, choose **Groq**, paste key, click **Save settings**.
+
+#### 2) OpenAI
+
+Link: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+1. Open the link.
+2. Log in or create an account.
+3. Click **Create new secret key**.
+4. Copy the key (you may only see it once).
+5. In extension **Settings**, choose **OpenAI**, paste key, click **Save settings**.
+
+#### 3) Anthropic
+
+Link: [https://console.anthropic.com](https://console.anthropic.com)
+
+1. Open the link.
+2. Sign up or log in.
+3. Open API Keys.
+4. Create a new key.
+5. Copy the key.
+6. In extension **Settings**, choose **Anthropic**, paste key, click **Save settings**.
+
+#### 4) Google Gemini
+
+Link: [https://aistudio.google.dev/apikey](https://aistudio.google.dev/apikey)
+
+1. Open the link.
+2. Sign in with your Google account.
+3. Click **Create API key**.
+4. Copy the key.
+5. In extension **Settings**, choose **Google Gemini**, paste key, click **Save settings**.
+
+#### 5) OpenRouter
+
+Link: [https://openrouter.ai/keys](https://openrouter.ai/keys)
+
+1. Open the link.
+2. Sign up or log in.
+3. Create a new API key.
+4. Copy the key.
+5. In extension **Settings**, choose **OpenRouter**, paste key, click **Save settings**.
+
+#### 6) Ollama (no key needed, runs locally)
+
+Link: [https://ollama.com](https://ollama.com)
+
+- No API key is needed.
+- You install Ollama on your own computer and run a local model.
+- If you want this option, follow [Option 2: Ollama (fully local, no API key)](#option-2-ollama-fully-local-no-api-key).
+
 ### Option 1: Cloud provider (fastest setup)
 
 1. Install the extension (see [Installation](#installation) below).

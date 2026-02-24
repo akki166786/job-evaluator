@@ -1,10 +1,11 @@
 import * as esbuild from 'esbuild';
-import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, 'dist');
+const distPopupDir = join(__dirname, 'dist-popup');
 
 const watch = process.argv.includes('--watch');
 
@@ -42,7 +43,6 @@ async function build(bump = false) {
 
   await esbuild.build({
     entryPoints: [
-      'src/popup/popup.ts',
       'src/content/content.ts',
       'src/background/service-worker.ts',
     ],
@@ -59,8 +59,22 @@ async function build(bump = false) {
   });
 
   copyFileSync(join(__dirname, 'manifest.json'), join(outDir, 'manifest.json'));
-  copyFileSync(join(__dirname, 'src/popup/popup.html'), join(outDir, 'popup.html'));
-  copyFileSync(join(__dirname, 'src/popup/popup.css'), join(outDir, 'popup.css'));
+  // Popup is built by Vite (npm run build:popup); copy from dist-popup
+  if (existsSync(distPopupDir)) {
+    const popupHtmlNested = join(distPopupDir, 'src', 'popup-react', 'popup.html');
+    const popupHtmlRoot = join(distPopupDir, 'popup.html');
+    if (existsSync(popupHtmlNested)) {
+      copyFileSync(popupHtmlNested, join(outDir, 'popup.html'));
+    } else if (existsSync(popupHtmlRoot)) {
+      copyFileSync(popupHtmlRoot, join(outDir, 'popup.html'));
+    }
+    const files = readdirSync(distPopupDir);
+    for (const f of files) {
+      if (f.startsWith('popup') && (f.endsWith('.js') || f.endsWith('.css'))) {
+        copyFileSync(join(distPopupDir, f), join(outDir, f));
+      }
+    }
+  }
 
   // Copy extension icons
   const iconsOutDir = join(outDir, 'icons');
@@ -84,7 +98,6 @@ async function build(bump = false) {
 if (watch) {
   const ctx = await esbuild.context({
     entryPoints: [
-      'src/popup/popup.ts',
       'src/content/content.ts',
       'src/background/service-worker.ts',
     ],
