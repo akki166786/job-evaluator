@@ -21,6 +21,7 @@ const SETTINGS_KEYS = [
   'ollamaModel',
   'providerModels',
   'activeProviders',
+  'selectedResumeIds',
 ] as const;
 
 function openDB(): Promise<IDBDatabase> {
@@ -166,6 +167,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     ollamaModel,
     providerModels,
     activeProviders,
+    selectedResumeIds,
     legacyApiKey,
   ] = await Promise.all([
     getSetting('profileIntent'),
@@ -176,6 +178,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     getSetting('ollamaModel'),
     getSetting('providerModels').catch(() => undefined),
     getSetting('activeProviders').catch(() => undefined),
+    getSetting('selectedResumeIds').catch(() => []),
     getLegacyApiKey(),
   ]);
   // Migrate legacy single apiKey (v1) to per-provider apiKeys map (v2)
@@ -191,6 +194,9 @@ export async function getSettings(): Promise<SettingsRecord> {
   if (ollamaModel && !normalizedProviderModels.ollama) {
     normalizedProviderModels.ollama = ollamaModel;
   }
+  const normalizedSelectedResumeIds = Array.isArray(selectedResumeIds)
+    ? selectedResumeIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : [];
   return {
     profileIntent,
     skillsTechStack,
@@ -200,6 +206,7 @@ export async function getSettings(): Promise<SettingsRecord> {
     ollamaModel,
     providerModels: normalizedProviderModels,
     activeProviders: Array.isArray(activeProviders) ? activeProviders : undefined,
+    selectedResumeIds: normalizedSelectedResumeIds,
   };
 }
 

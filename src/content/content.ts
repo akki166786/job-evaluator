@@ -81,13 +81,28 @@ function getJobIdFromUrl(): string | null {
 }
 
 function getJobIdFromDom(): string | null {
-  const el = document.querySelector('[data-job-id], [data-entity-urn]');
-  const jobId = el?.getAttribute('data-job-id');
-  if (jobId) return jobId;
-  const urn = el?.getAttribute('data-entity-urn');
-  if (!urn) return null;
-  const urnMatch = urn.match(/:jobPosting:(\d+)/);
-  return urnMatch ? urnMatch[1] : null;
+  const selectors = [
+    '.jobs-search__job-details [data-job-id]',
+    '.jobs-details [data-job-id]',
+    '.jobs-search__job-details [data-entity-urn*="jobPosting:"]',
+    '.jobs-details [data-entity-urn*="jobPosting:"]',
+    '[aria-current="true"][data-job-id]',
+    '[aria-current="page"][data-job-id]',
+    '[data-job-id].jobs-search-results-list__list-item--active',
+    '.job-card-container[aria-current="page"][data-job-id]',
+    '[data-job-id]',
+    '[data-entity-urn*="jobPosting:"]',
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const jobId = el.getAttribute('data-job-id');
+    if (jobId && /^\d+$/.test(jobId)) return jobId;
+    const urn = el.getAttribute('data-entity-urn');
+    const urnMatch = urn?.match(/:jobPosting:(\d+)/);
+    if (urnMatch) return urnMatch[1];
+  }
+  return null;
 }
 
 function getMetaContent(name: string): string {
@@ -257,7 +272,16 @@ function extractLocationFallback(): string {
 
 export function extractJobData(): JobData | null {
   const jsonLd = parseJsonLdJob();
-  const jobId = getJobIdFromUrl() ?? getJobIdFromDom() ?? jsonLd?.id ?? '';
+  const href = getCurrentUrl();
+  const onListPage = /\/jobs\/search\//.test(href)
+    || /\/jobs\/search-results\//.test(href)
+    || /\/jobs\/collections\//.test(href);
+  const urlJobId = getJobIdFromUrl();
+  const activeJobId = onListPage ? getActiveJobIdFromDom() : null;
+  const domJobId = getJobIdFromDom();
+  const jobId = onListPage
+    ? (activeJobId ?? domJobId ?? urlJobId ?? jsonLd?.id ?? '')
+    : (urlJobId ?? domJobId ?? jsonLd?.id ?? '');
 
   // Title selectors — /jobs/view, /jobs/search, /jobs/collections detail pane
   const titleSelectors = [
@@ -368,8 +392,10 @@ export function extractJobData(): JobData | null {
   // #region agent log
   const _dbg = {
     url: window.location.href,
-    jobIdFromUrl: getJobIdFromUrl(),
-    jobIdFromDom: getJobIdFromDom(),
+    jobIdFromUrl: urlJobId,
+    jobIdFromDom: domJobId,
+    activeJobId,
+    onListPage,
     jsonLdId: jsonLd?.id ?? null,
     jsonLdTitle: jsonLd?.title?.slice(0, 80) ?? null,
     jsonLdDescLen: jsonLd?.description?.length ?? 0,
@@ -522,14 +548,16 @@ function getJobIdFromUrlString(): string | null {
 // --- Batch mode: left pane job list and score widgets ---
 const JOB_EVAL_WIDGET_CLASS = 'job-eval-score-badge';
 const JOB_EVAL_WIDGET_CONTAINER = 'job-eval-score-container';
+const JOB_EVAL_WIDGET_CONTAINER_INLINE = 'job-eval-score-container-inline';
+const JOB_EVAL_WIDGET_CONTAINER_FLOATING = 'job-eval-score-container-floating';
 
 /** Left-pane list container selectors (order matters). LinkedIn may change these. */
 const LEFT_PANE_LIST_SELECTORS = [
   '.jobs-search-results-list',
   '.jobs-search-two-pane__results-list',
   '.scaffold-layout__list-container',
-  '[class*="jobs-search-results"]',
-  '[class*="scaffold-layout__list"]',
+  '.jobs-search-results__list',
+  'ul.jobs-search__results-list',
 ];
 
 /** Selectors for job cards when no list container is found (cards in the left pane). */
@@ -543,6 +571,16 @@ const LEFT_PANE_CARD_SELECTORS = [
   'li[class*="jobs-search-results__list-item"]',
   '.scaffold-layout__list-item',
 ];
+
+const JOB_DETAIL_PANE_SELECTORS = [
+  '.jobs-search__job-details',
+  '.jobs-details',
+  '.scaffold-layout__detail',
+];
+
+const LEFT_PANE_LIST_SELECTOR_QUERY = LEFT_PANE_LIST_SELECTORS.join(', ');
+const LEFT_PANE_CARD_SELECTOR_QUERY = LEFT_PANE_CARD_SELECTORS.join(', ');
+const JOB_DETAIL_PANE_SELECTOR_QUERY = JOB_DETAIL_PANE_SELECTORS.join(', ');
 
 /** Job card / title selectors within a card. */
 const JOB_CARD_TITLE_SELECTORS = [
@@ -563,6 +601,16 @@ export interface LeftPaneJob {
   id: string;
   title: string;
   company: string;
+}
+
+function canonicalJobId(jobId: string): string {
+  const raw = (jobId || '').trim();
+  if (!raw) return raw;
+  const urnMatch = raw.match(/jobPosting:(\d+)/i);
+  if (urnMatch) return urnMatch[1];
+  const numericMatch = raw.match(/\b(\d{6,})\b/);
+  if (numericMatch) return numericMatch[1];
+  return raw;
 }
 
 function extractJobIdFromElement(el: Element | null): string | null {
@@ -671,21 +719,42 @@ function getLeftPaneJobs(): LeftPaneJob[] {
 }
 
 function getLeftPaneCardElement(jobId: string): HTMLElement | null {
+  const canonicalId = canonicalJobId(jobId);
+  const idSelectors = canonicalId !== jobId ? [jobId, canonicalId] : [canonicalId];
+  const idSet = new Set(idSelectors.map((id) => canonicalJobId(id)).filter(Boolean));
   for (const sel of LEFT_PANE_LIST_SELECTORS) {
     const list = document.querySelector(sel);
     if (!list) continue;
-    const attrMatch = list.querySelector<HTMLElement>(
-      `[data-job-id="${jobId}"], [data-occludable-job-id="${jobId}"], [data-entity-urn*="jobPosting:${jobId}"]`
-    );
-    if (attrMatch) return normalizeCardRoot(attrMatch);
-    const link = list.querySelector<HTMLAnchorElement>(`a[href*="/jobs/view/${jobId}"]`);
-    if (link) return normalizeCardRoot(link);
+    for (const id of idSelectors) {
+      const attrMatch = list.querySelector<HTMLElement>(
+        `[data-job-id="${id}"], [data-occludable-job-id="${id}"], [data-entity-urn*="jobPosting:${id}"]`
+      );
+      if (attrMatch) {
+        const card = normalizeCardRoot(attrMatch);
+        if (!card.closest(JOB_DETAIL_PANE_SELECTOR_QUERY)) return card;
+      }
+      const link = list.querySelector<HTMLAnchorElement>(`a[href*="/jobs/view/${id}"]`);
+      if (link) {
+        const card = normalizeCardRoot(link);
+        if (!card.closest(JOB_DETAIL_PANE_SELECTOR_QUERY)) return card;
+      }
+    }
   }
-  // Fallback: find card by id (same card selectors as getLeftPaneJobs).
-  const direct = document.querySelector<HTMLElement>(
-    `[data-job-id="${jobId}"], [data-occludable-job-id="${jobId}"], [data-entity-urn*="jobPosting:${jobId}"], a[href*="/jobs/view/${jobId}"]`
-  );
-  return direct ? normalizeCardRoot(direct) : null;
+
+  // Fallback: resolve from card candidates when LinkedIn omits a stable list container.
+  const seen = new Set<HTMLElement>();
+  for (const cardSel of LEFT_PANE_CARD_SELECTORS) {
+    const candidates = document.querySelectorAll(cardSel);
+    for (const candidate of candidates) {
+      const card = normalizeCardRoot(candidate);
+      if (seen.has(card)) continue;
+      seen.add(card);
+      if (card.closest(JOB_DETAIL_PANE_SELECTOR_QUERY)) continue;
+      const cardId = canonicalJobId(extractJobIdFromElement(card) ?? '');
+      if (cardId && idSet.has(cardId)) return card;
+    }
+  }
+  return null;
 }
 
 function selectJobById(jobId: string): boolean {
@@ -711,6 +780,12 @@ const jobScoreWidgetStyles = `
   .${JOB_EVAL_WIDGET_CONTAINER} {
     position: absolute; bottom: 6px; right: 8px;
     display: inline-flex; align-items: center;
+  }
+  .${JOB_EVAL_WIDGET_CONTAINER}.${JOB_EVAL_WIDGET_CONTAINER_INLINE} {
+    position: static;
+  }
+  .${JOB_EVAL_WIDGET_CONTAINER}.${JOB_EVAL_WIDGET_CONTAINER_FLOATING} {
+    position: absolute; bottom: 6px; right: 8px; margin-left: 0;
   }
   .${JOB_EVAL_WIDGET_CLASS} {
     font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
@@ -824,6 +899,16 @@ function applyBadges() {
 
 function applyBadgesImmediate() {
   ensureScoreWidgetStyles();
+  attachJobListObserver();
+  // Hard cleanup: remove any stale score widgets outside the left list pane.
+  document.querySelectorAll(`.${JOB_EVAL_WIDGET_CONTAINER}`).forEach((container) => {
+    const inDetailPane = !!container.closest(JOB_DETAIL_PANE_SELECTOR_QUERY);
+    const inLeftList = !!container.closest(LEFT_PANE_LIST_SELECTOR_QUERY);
+    const inLeftCard = !!container.closest(LEFT_PANE_CARD_SELECTOR_QUERY);
+    if (inDetailPane || (!inLeftList && !inLeftCard)) {
+      container.remove();
+    }
+  });
   const allIds = new Set([...jobScores.keys(), ...evaluatingJobIds, ...rateLimitedJobIds]);
   allIds.forEach((jobId) => {
     const card = getLeftPaneCardElement(jobId);
@@ -833,7 +918,27 @@ function applyBadgesImmediate() {
     if (!container) {
       container = document.createElement('span');
       container.className = JOB_EVAL_WIDGET_CONTAINER;
-      card.appendChild(container);
+    }
+    let titleHost: Element | null = null;
+    for (const titleSel of JOB_CARD_TITLE_SELECTORS) {
+      const candidate = card.querySelector(titleSel);
+      if (candidate && getText(candidate)) {
+        titleHost = candidate;
+        break;
+      }
+    }
+    if (titleHost) {
+      container.classList.remove(JOB_EVAL_WIDGET_CONTAINER_FLOATING);
+      container.classList.add(JOB_EVAL_WIDGET_CONTAINER_INLINE);
+      if (container.parentElement !== titleHost) {
+        titleHost.appendChild(container);
+      }
+    } else {
+      container.classList.remove(JOB_EVAL_WIDGET_CONTAINER_INLINE);
+      container.classList.add(JOB_EVAL_WIDGET_CONTAINER_FLOATING);
+      if (container.parentElement !== card) {
+        card.appendChild(container);
+      }
     }
     let badge = container.querySelector(`.${JOB_EVAL_WIDGET_CLASS}`);
     if (!badge) {
@@ -930,9 +1035,11 @@ function applyRecentlyVisitedBadgesImmediate(reason = 'unknown') {
 
 function setJobScores(scores: Record<string, number>) {
   Object.entries(scores).forEach(([id, score]) => {
-    jobScores.set(id, score);
-    evaluatingJobIds.delete(id);
-    rateLimitedJobIds.delete(id);
+    const key = canonicalJobId(id);
+    if (!key) return;
+    jobScores.set(key, score);
+    evaluatingJobIds.delete(key);
+    rateLimitedJobIds.delete(key);
   });
   applyBadges();
 }
@@ -956,12 +1063,14 @@ function setEvaluatingJobs(
   evaluatingJobProvider.clear();
   evaluatingJobIsRateLimit.clear();
   jobs.forEach(({ jobId, startedAt, status, retryCount, provider, isRateLimit }) => {
-    evaluatingJobIds.add(jobId);
-    evaluatingJobStartedAt.set(jobId, startedAt);
-    if (status) evaluatingJobStatus.set(jobId, status);
-    if (retryCount != null) evaluatingJobRetryCount.set(jobId, retryCount);
-    if (provider) evaluatingJobProvider.set(jobId, provider);
-    if (isRateLimit) evaluatingJobIsRateLimit.set(jobId, true);
+    const key = canonicalJobId(jobId);
+    if (!key) return;
+    evaluatingJobIds.add(key);
+    evaluatingJobStartedAt.set(key, startedAt);
+    if (status) evaluatingJobStatus.set(key, status);
+    if (retryCount != null) evaluatingJobRetryCount.set(key, retryCount);
+    if (provider) evaluatingJobProvider.set(key, provider);
+    if (isRateLimit) evaluatingJobIsRateLimit.set(key, true);
   });
   applyBadges();
   if (evaluatingTimerIntervalId != null) {
@@ -982,8 +1091,10 @@ function setEvaluatingJobs(
 
 function setRateLimitedJobs(jobIds: string[]) {
   jobIds.forEach((id) => {
-    rateLimitedJobIds.add(id);
-    evaluatingJobIds.delete(id);
+    const key = canonicalJobId(id);
+    if (!key) return;
+    rateLimitedJobIds.add(key);
+    evaluatingJobIds.delete(key);
   });
   applyBadges();
 }
@@ -1042,6 +1153,7 @@ function getJobListContainer(): Element | null {
 let recentlyVisitedBadgeDebounceId: ReturnType<typeof setTimeout> | null = null;
 const RECENTLY_VISITED_BADGE_DEBOUNCE_MS = 200;
 let jobListObserver: MutationObserver | null = null;
+let observedJobListEl: Element | null = null;
 
 function scheduleRecentlyVisitedBadgesOnce(caller = 'observer') {
   if (DEBUG_RECENTLY_VISITED) console.log('[job-eval] scheduleRecentlyVisitedBadgesOnce', { caller });
@@ -1055,7 +1167,13 @@ function scheduleRecentlyVisitedBadgesOnce(caller = 'observer') {
 
 function attachJobListObserver() {
   const list = getJobListContainer();
-  if (!list || jobListObserver != null) return;
+  if (!list) return;
+  if (jobListObserver != null && observedJobListEl === list && list.isConnected) return;
+  if (jobListObserver != null) {
+    jobListObserver.disconnect();
+    jobListObserver = null;
+  }
+  observedJobListEl = list;
   if (DEBUG_RECENTLY_VISITED) console.log('[job-eval] attachJobListObserver: attached');
   jobListObserver = new MutationObserver((mutations) => {
     const hasAdditions = mutations.some((m) => m.addedNodes.length > 0);
@@ -1063,7 +1181,10 @@ function attachJobListObserver() {
       const addCount = mutations.reduce((n, m) => n + m.addedNodes.length, 0);
       console.log('[job-eval] observer: mutations', { mutations: mutations.length, addedNodes: addCount });
     }
-    if (hasAdditions) scheduleRecentlyVisitedBadgesOnce('observer');
+    if (hasAdditions) {
+      applyBadges();
+      scheduleRecentlyVisitedBadgesOnce('observer');
+    }
   });
   jobListObserver.observe(list, { childList: true, subtree: true });
 }
@@ -1082,6 +1203,7 @@ function cleanupAfterInvalidation() {
     jobListObserver.disconnect();
     jobListObserver = null;
   }
+  observedJobListEl = null;
 }
 
 let lastNotifiedJobId: string | null = getActiveJobIdFromDom() ?? getJobIdFromUrlString();
@@ -1229,26 +1351,7 @@ if (isExtensionContextValid()) {
           });
         return true;
       }
-      // Badge/score handlers only make sense in the top frame
-      if (!isTopFrame) return false;
-      if (msg.type === 'GET_LEFT_PANE_JOBS') {
-        try {
-          const jobs = getLeftPaneJobs();
-          sendResponse({ ok: true, jobs });
-        } catch (e) {
-          sendResponse({ ok: false, error: (e as Error).message });
-        }
-        return false;
-      }
-      if (msg.type === 'SELECT_JOB' && msg.jobId) {
-        try {
-          const ok = selectJobById(msg.jobId);
-          sendResponse({ ok });
-        } catch (e) {
-          sendResponse({ ok: false, error: (e as Error).message });
-        }
-        return false;
-      }
+      // Allow score/evaluating badges in any frame; some LinkedIn layouts render job list outside top frame.
       if (msg.type === 'SET_JOB_SCORES' && msg.scores) {
         try {
           setJobScores(msg.scores);
@@ -1274,6 +1377,26 @@ if (isExtensionContextValid()) {
         try {
           setRateLimitedJobs(msg.jobIds);
           sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        return false;
+      }
+      // GET_LEFT_PANE_JOBS/SELECT_JOB remain top-frame only.
+      if (!isTopFrame) return false;
+      if (msg.type === 'GET_LEFT_PANE_JOBS') {
+        try {
+          const jobs = getLeftPaneJobs();
+          sendResponse({ ok: true, jobs });
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        return false;
+      }
+      if (msg.type === 'SELECT_JOB' && msg.jobId) {
+        try {
+          const ok = selectJobById(msg.jobId);
+          sendResponse({ ok });
         } catch (e) {
           sendResponse({ ok: false, error: (e as Error).message });
         }

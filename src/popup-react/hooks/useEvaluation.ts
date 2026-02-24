@@ -7,6 +7,7 @@ import {
 } from '@/lib/db';
 import {
   getCacheKeyForJob,
+  getJobIdFromUrl,
   isLinkedInJobPage,
   isJobListPage,
 } from '@/lib/linkedin';
@@ -52,6 +53,18 @@ function shortenTitle(title: string): string {
   const t = (title || '').trim();
   if (t.length <= PROCESSING_TITLE_MAX) return t;
   return t.slice(0, PROCESSING_TITLE_MAX - 1) + '…';
+}
+
+function normalizeJobId(jobId: string, tabUrl: string | undefined): string {
+  const raw = (jobId || '').trim();
+  if (/^\d+$/.test(raw)) return raw;
+  const fromUrl = getJobIdFromUrl(tabUrl);
+  if (fromUrl) return fromUrl;
+  const urnMatch = raw.match(/jobPosting:(\d+)/i);
+  if (urnMatch) return urnMatch[1];
+  const numericMatch = raw.match(/\b(\d{6,})\b/);
+  if (numericMatch) return numericMatch[1];
+  return raw;
 }
 
 export function useEvaluation(
@@ -119,7 +132,12 @@ export function useEvaluation(
       try {
         await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobs });
       } catch {
-        /* tab or content script unavailable */
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] }).catch(() => {});
+          await chrome.tabs.sendMessage(tab.id, { type: 'SET_EVALUATING_JOBS', jobs });
+        } catch {
+          /* tab or content script unavailable */
+        }
       }
     },
     [processingJobs]
@@ -134,9 +152,36 @@ export function useEvaluation(
     try {
       await chrome.tabs.sendMessage(tab.id, { type: 'SET_RATE_LIMITED_JOBS', jobIds });
     } catch {
-      /* tab or content script unavailable */
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] }).catch(() => {});
+        await chrome.tabs.sendMessage(tab.id, { type: 'SET_RATE_LIMITED_JOBS', jobIds });
+      } catch {
+        /* tab or content script unavailable */
+      }
     }
   }, []);
+
+  const sendScoresToTab = useCallback(
+    async (scores: Record<string, number>, tabId?: number, tabUrl?: string) => {
+      if (Object.keys(scores).length === 0) return;
+      const tab =
+        tabId != null
+          ? await chrome.tabs.get(tabId).catch(() => null)
+          : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      if (!tab?.id || !isJobListPage(tabUrl ?? tab.url)) return;
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'SET_JOB_SCORES', scores });
+      } catch {
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] }).catch(() => {});
+          await chrome.tabs.sendMessage(tab.id, { type: 'SET_JOB_SCORES', scores });
+        } catch {
+          /* tab or content script unavailable */
+        }
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     sendEvaluatingJobsToTab();
@@ -157,13 +202,13 @@ export function useEvaluation(
         if (cached != null) scores[j.id] = cached.score;
       }
       if (Object.keys(scores).length > 0) {
-        await chrome.tabs.sendMessage(tab.id, { type: 'SET_JOB_SCORES', scores });
+        await sendScoresToTab(scores, tab.id, tab.url);
         log(`Refreshed ${Object.keys(scores).length} cached score(s) on list page`);
       }
     } catch {
       // Tab closed, context invalid, or content script unavailable
     }
-  }, [log]);
+  }, [log, sendScoresToTab]);
 
   useEffect(() => {
     refreshCachedScoresOnPage().catch(() => {});
@@ -227,7 +272,13 @@ export function useEvaluation(
       pendingTimeoutsRef.current.delete(cacheKey);
 
       if (isRateLimited && msg.jobId) {
-        sendRateLimitedToTab([msg.jobId], msg.senderTabId);
+        sendRateLimitedToTab([normalizeJobId(msg.jobId, undefined)], msg.senderTabId);
+      }
+      if (msg.result && msg.jobId && msg.senderTabId != null) {
+        sendScoresToTab(
+          { [normalizeJobId(msg.jobId, undefined)]: msg.result.score },
+          msg.senderTabId
+        );
       }
 
       setProcessingJobs((prev) => {
@@ -288,7 +339,7 @@ export function useEvaluation(
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, [log, sendRateLimitedToTab]);
+  }, [log, sendRateLimitedToTab, sendScoresToTab]);
 
   // When user switches to a LinkedIn job tab or navigates to one, clear "Open a LinkedIn page" error
   useEffect(() => {
@@ -360,7 +411,9 @@ export function useEvaluation(
         return;
       }
 
-      const job = response.job as JobData;
+      const rawJob = response.job as JobData;
+      const normalizedJobId = normalizeJobId(rawJob.id, tab.url);
+      const job: JobData = normalizedJobId !== rawJob.id ? { ...rawJob, id: normalizedJobId } : rawJob;
       const cacheKey = getCacheKeyForJob(job, tab.url);
       log(`Job: ${job.id} (cache key: ${cacheKey}) — ${job.title || '(no title)'}`);
 
@@ -390,6 +443,11 @@ export function useEvaluation(
             resumeIds,
           },
         }));
+        await sendScoresToTab(
+          { [normalizeJobId(job.id, tab.url)]: cached.score },
+          tab.id,
+          tab.url
+        );
         log(`Using cached result: ${cached.score}/100`);
         return;
       }
@@ -406,7 +464,7 @@ export function useEvaluation(
       if (result?.error) {
         const isRateLimit = typeof result.error === 'string' && result.error.toLowerCase().includes('rate limit');
         if (isRateLimit && job.id) {
-          sendRateLimitedToTab([job.id], tab.id);
+          sendRateLimitedToTab([normalizeJobId(job.id, tab.url)], tab.id);
         }
         setState((s) => ({
           ...s,
@@ -448,14 +506,11 @@ export function useEvaluation(
       const evalResult = result as EvaluationResult;
       await saveJobEvaluation(cacheKey, evalResult);
       if (isJobListPage(tab.url)) {
-        try {
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'SET_JOB_SCORES',
-            scores: { [job.id]: evalResult.score },
-          });
-        } catch {
-          /* ignore */
-        }
+        await sendScoresToTab(
+          { [normalizeJobId(job.id, tab.url)]: evalResult.score },
+          tab.id,
+          tab.url
+        );
       }
 
       setState((s) => ({
@@ -485,7 +540,7 @@ export function useEvaluation(
       }));
       log('Exception: ' + err.message, 'error');
     }
-  }, [selectedResumeIds, log, sendRateLimitedToTab, processingJobs]);
+  }, [selectedResumeIds, log, sendRateLimitedToTab, sendScoresToTab, processingJobs]);
 
   const reRun = useCallback(async () => {
     const { pendingRerun } = state;
@@ -498,11 +553,13 @@ export function useEvaluation(
       return;
     }
 
-    const job = pendingRerun.job ?? (await chrome.tabs.sendMessage(tab.id, { type: 'GET_JOB_DATA' }))?.job;
-    if (!job) {
+    const fetchedJob = pendingRerun.job ?? (await chrome.tabs.sendMessage(tab.id, { type: 'GET_JOB_DATA' }))?.job;
+    if (!fetchedJob) {
       setState((s) => ({ ...s, loading: false, error: 'Could not read job from page.' }));
       return;
     }
+    const normalizedJobId = normalizeJobId(fetchedJob.id, tab.url);
+    const job: JobData = normalizedJobId !== fetchedJob.id ? { ...fetchedJob, id: normalizedJobId } : fetchedJob;
 
     try {
       const result = await chrome.runtime.sendMessage({
@@ -579,11 +636,18 @@ export function useEvaluation(
         log('Could not read job from page.', 'error');
         return;
       }
-      if (!response?.ok || !response.job || response.job.id !== j.jobId) {
+      if (!response?.ok || !response.job) {
         log('Job on page does not match. Open the job and click Retry.', 'warn');
         return;
       }
-      const job = response.job;
+      const normalizedJobId = normalizeJobId(response.job.id, tab.url);
+      if (normalizedJobId !== j.jobId) {
+        log('Job on page does not match. Open the job and click Retry.', 'warn');
+        return;
+      }
+      const job: JobData = normalizedJobId !== response.job.id
+        ? { ...response.job, id: normalizedJobId }
+        : response.job;
       const resumeIds = selectedResumeIds.length > 0 ? selectedResumeIds : undefined;
       setProcessingJobs((prev) =>
         prev.map((x) =>

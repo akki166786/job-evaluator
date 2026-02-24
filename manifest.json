@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Job Evaluator for LinkedIn (Free)",
-  "version": "1.0.92",
+  "version": "1.0.104",
   "description": "Evaluate LinkedIn jobs against your resume and career goals before you apply. Free, private, and user-controlled.",
   "icons": {
     "16": "icons/icon16.png",
@@ -45,7 +45,8 @@
       "matches": [
         "*://www.linkedin.com/jobs/view/*",
         "*://www.linkedin.com/jobs/collections/*",
-        "*://www.linkedin.com/jobs/search/*"
+        "*://www.linkedin.com/jobs/search/*",
+        "*://www.linkedin.com/jobs/search-results/*"
       ],
       "js": [
         "content.js"

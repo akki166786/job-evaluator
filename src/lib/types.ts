@@ -28,6 +28,8 @@ export interface SettingsRecord {
   providerModels?: Partial<Record<ApiProvider, string>>;
   /** Providers to use for rotation (if empty, auto-detect from configured API keys). */
   activeProviders?: ApiProvider[];
+  /** Resume IDs selected in the main panel; restored when panel reopens. */
+  selectedResumeIds: string[];
 }
 
 export type ApiProvider = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'groq';
@@ -41,6 +43,7 @@ export const DEFAULT_SETTINGS: SettingsRecord = {
   apiKeys: {},
   ollamaModel: 'llama3.1:8b',
   providerModels: {},
+  selectedResumeIds: [],
 };
 
 /** Result of the evaluation (from LLM, parsed JSON). */
