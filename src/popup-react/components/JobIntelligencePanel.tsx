@@ -92,10 +92,42 @@ export function JobIntelligencePanel({
 
   const runEvaluationRef = useRef(runEvaluation);
   runEvaluationRef.current = runEvaluation;
+  const jobChangeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSeenJobIdRef = useRef<string | null>(null);
   // Auto-run when panel opens with Auto Evaluate on, or when user turns Auto Evaluate on
   useEffect(() => {
     if (!autoEvaluate) return;
     runEvaluationRef.current();
+  }, [autoEvaluate]);
+
+  // On search/collections pages, selecting another job card doesn't always trigger tab URL updates.
+  // Listen to content-script job-change events so Auto Evaluate follows the selected card.
+  useEffect(() => {
+    if (!autoEvaluate) return;
+    const listener = (
+      msg: { type?: string; jobId?: string },
+      sender: chrome.runtime.MessageSender
+    ) => {
+      if (msg?.type !== 'JOB_PAGE_CHANGED') return;
+      chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (!tab?.id || sender.tab?.id !== tab.id) return;
+        if (!tab.url || !/linkedin\.com\/jobs/.test(tab.url)) return;
+        if (msg.jobId && msg.jobId === lastSeenJobIdRef.current) return;
+        if (msg.jobId) lastSeenJobIdRef.current = msg.jobId;
+        if (jobChangeTimeoutRef.current != null) clearTimeout(jobChangeTimeoutRef.current);
+        jobChangeTimeoutRef.current = setTimeout(() => {
+          runEvaluationRef.current();
+        }, 320);
+      }).catch(() => {});
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => {
+      chrome.runtime.onMessage.removeListener(listener);
+      if (jobChangeTimeoutRef.current != null) {
+        clearTimeout(jobChangeTimeoutRef.current);
+        jobChangeTimeoutRef.current = null;
+      }
+    };
   }, [autoEvaluate]);
 
   // When user switches to a LinkedIn job tab (or navigates to one) and Auto Evaluate is on, run evaluation

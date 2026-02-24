@@ -1,15 +1,25 @@
 import type { JobData } from './types';
 
-const LINKEDIN_JOB_VIEW = /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+/;
-const LINKEDIN_JOB_COLLECTIONS = /^https:\/\/www\.linkedin\.com\/jobs\/collections\//;
-const LINKEDIN_JOBS_SEARCH = /^https:\/\/www\.linkedin\.com\/jobs\/search\//;
+const LINKEDIN_JOB_VIEW = /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+(?:\/|$|\?)/;
+const LINKEDIN_JOB_COLLECTIONS = /^https:\/\/www\.linkedin\.com\/jobs\/collections(?:\/|$|\?)/;
+const LINKEDIN_JOBS_SEARCH = /^https:\/\/www\.linkedin\.com\/jobs\/search(?:\/|$|\?)/;
+const LINKEDIN_JOBS_SEARCH_RESULTS = /^https:\/\/www\.linkedin\.com\/jobs\/search-results(?:\/|$|\?)/;
 
 export function isLinkedInJobPage(url: string | undefined): boolean {
-  return !!(url && (LINKEDIN_JOB_VIEW.test(url) || LINKEDIN_JOB_COLLECTIONS.test(url) || LINKEDIN_JOBS_SEARCH.test(url)));
+  return !!(url && (
+    LINKEDIN_JOB_VIEW.test(url)
+    || LINKEDIN_JOB_COLLECTIONS.test(url)
+    || LINKEDIN_JOBS_SEARCH.test(url)
+    || LINKEDIN_JOBS_SEARCH_RESULTS.test(url)
+  ));
 }
 
 export function isJobListPage(url: string | undefined): boolean {
-  return !!(url && (LINKEDIN_JOBS_SEARCH.test(url) || LINKEDIN_JOB_COLLECTIONS.test(url)));
+  return !!(url && (
+    LINKEDIN_JOBS_SEARCH.test(url)
+    || LINKEDIN_JOB_COLLECTIONS.test(url)
+    || LINKEDIN_JOBS_SEARCH_RESULTS.test(url)
+  ));
 }
 
 export function getJobIdFromUrl(url: string | undefined): string | null {

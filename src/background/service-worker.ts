@@ -78,7 +78,9 @@ async function tryStartNext(): Promise<void> {
 
 function isJobListPage(url: string | undefined): boolean {
   if (!url) return false;
-  return /^https:\/\/www\.linkedin\.com\/jobs\/search\//.test(url) || /^https:\/\/www\.linkedin\.com\/jobs\/collections\//.test(url);
+  return /^https:\/\/www\.linkedin\.com\/jobs\/search(?:\/|$|\?)/.test(url)
+    || /^https:\/\/www\.linkedin\.com\/jobs\/search-results(?:\/|$|\?)/.test(url)
+    || /^https:\/\/www\.linkedin\.com\/jobs\/collections(?:\/|$|\?)/.test(url);
 }
 
 function runEvalTask(task: EvalTask, assignedProvider: ApiProvider, retryAttempt = 0): void {

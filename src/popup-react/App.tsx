@@ -5,19 +5,29 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ResumesPanel } from './components/ResumesPanel';
 import { DebugPanel } from './components/DebugPanel';
 import { Button } from './components/ui/button';
-import { cn } from './lib/utils';
-import { getAllResumes } from '@/lib/db';
+import { getAllResumes, getSettings, saveSettings } from '@/lib/db';
 
 const MAX_DEBUG_ENTRIES = 200;
 type DebugEntry = { ts: string; msg: string; level: 'info' | 'warn' | 'error' };
 
 export type TabId = 'main' | 'settings' | 'resumes' | 'debug';
 
+function pickSelectedResumeIds(
+  resumes: Array<{ id: string }>,
+  preferredIds: string[] | undefined
+): string[] {
+  if (resumes.length === 0) return [];
+  const preferred = Array.isArray(preferredIds) ? preferredIds : [];
+  const valid = preferred.filter((id) => resumes.some((r) => r.id === id));
+  return valid.length > 0 ? valid : [resumes[0].id];
+}
+
 export default function App() {
   const [tab, setTab] = useState<TabId>('main');
   const [selectedResumeIds, setSelectedResumeIds] = useState<string[]>([]);
   const [debugEntries, setDebugEntries] = useState<DebugEntry[]>([]);
   const [version, setVersion] = useState('');
+  const [didHydrateSelection, setDidHydrateSelection] = useState(false);
 
   useEffect(() => {
     try {
@@ -29,25 +39,36 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [list, settings] = await Promise.all([getAllResumes(), getSettings()]);
+        if (cancelled) return;
+        setSelectedResumeIds(pickSelectedResumeIds(list, settings.selectedResumeIds));
+      } catch {
+        if (!cancelled) setSelectedResumeIds([]);
+      } finally {
+        if (!cancelled) setDidHydrateSelection(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!didHydrateSelection) return;
+    saveSettings({ selectedResumeIds }).catch(() => {});
+  }, [didHydrateSelection, selectedResumeIds]);
+
+  useEffect(() => {
+    if (tab !== 'resumes') return;
     getAllResumes()
       .then((list) => {
-        if (list.length === 0) setSelectedResumeIds([]);
-        else if (list.length === 1) setSelectedResumeIds([list[0].id]);
-        else
-          setSelectedResumeIds((prev) =>
-            prev.length === 0 ? [list[0].id] : prev.filter((id) => list.some((r) => r.id === id))
-          );
+        setSelectedResumeIds((prev) => pickSelectedResumeIds(list, prev));
       })
       .catch(() => setSelectedResumeIds([]));
-  }, [tab === 'resumes']);
-  useEffect(() => {
-    getAllResumes()
-      .then((list) => {
-        if (list.length === 1) setSelectedResumeIds([list[0].id]);
-        else if (list.length > 1) setSelectedResumeIds((prev) => (prev.length === 0 ? [list[0].id] : prev));
-      })
-      .catch(() => {});
-  }, []);
+  }, [tab]);
 
   const addDebugLog = useCallback((msg: string, level: 'info' | 'warn' | 'error' = 'info') => {
     const ts = new Date().toISOString().slice(11, 23);
@@ -137,8 +158,7 @@ export default function App() {
             onBack={() => setTab('main')}
             onResumesChange={() => {
               getAllResumes().then((list) => {
-                if (list.length === 1) setSelectedResumeIds([list[0].id]);
-                else setSelectedResumeIds((prev) => prev.filter((id) => list.some((r) => r.id === id)));
+                setSelectedResumeIds((prev) => pickSelectedResumeIds(list, prev));
               });
             }}
           />
